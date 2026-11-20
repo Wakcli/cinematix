@@ -1775,6 +1775,8 @@ struct Game<'a> {
     pub(super) cinematix_world: cinematix_world::Applied,
     /// The playhead time `cinematix_world` was resolved at.
     pub(super) cinematix_world_time: Option<f64>,
+    /// The editor revision the overlay was last resolved from.
+    pub(super) cinematix_world_revision: Option<u64>,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
@@ -8224,6 +8226,20 @@ impl Game<'_> {
             post_blend: Some(&post_blend),
             post_biome: Some(post_of(biome)),
         });
+        if let Some(env) = self.cinematix_environment() {
+            if let Some(v) = env.fog_start {
+                sky.fog_start = v;
+            }
+            if let Some(v) = env.fog_end {
+                sky.fog_end = v;
+            }
+            if let Some(v) = env.sky_color {
+                sky.sky_color = v;
+            }
+            if let Some(v) = env.fog_color {
+                sky.fog_color = v;
+            }
+        }
         self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 && !self.settings.file.bool("hideLightningFlashes") {
             // ClientLevel's flash layer while skyFlashTime > 0: the sky colour
@@ -10944,6 +10960,7 @@ impl<'a> Game<'a> {
             cinematix_export: None,
             cinematix_world: Default::default(),
             cinematix_world_time: None,
+            cinematix_world_revision: None,
             lan: None,
             integrated: None,
             level_shapes: Default::default(),

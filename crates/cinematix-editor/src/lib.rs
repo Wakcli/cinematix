@@ -12,7 +12,7 @@ pub mod icons;
 mod menu;
 
 pub use cinematix_anim::{Interp, Prop};
-pub use cinematix_scene::{BlockChange, BlockPos, BlockState as FilmBlock};
+pub use cinematix_scene::{BlockChange, BlockPos, BlockState as FilmBlock, Clip, EnvironmentData};
 pub use cinematix_ui::{Mods, Rect};
 pub use document::{
     Document, camera_data, default_interp, key_light_data, kind_key, new_node, prop_key, props_of,

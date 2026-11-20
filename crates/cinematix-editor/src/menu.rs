@@ -106,6 +106,13 @@ fn channel_items(ed: &Editor) -> Vec<Item> {
         (Interp::Linear, "cinematix.interp.linear"),
         (Interp::Smooth, "cinematix.interp.smooth"),
         (Interp::Spline, "cinematix.interp.spline"),
+        (
+            Interp::Bezier {
+                out: [0.42, 0.0],
+                in_: [0.58, 1.0],
+            },
+            "cinematix.interp.bezier",
+        ),
     ] {
         items.push(Item::command(
             key,

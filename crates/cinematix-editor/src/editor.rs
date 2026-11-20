@@ -3,7 +3,7 @@ use crate::frame::Frame;
 use crate::menu::Menu;
 use cinematix_anim::{Interp, Prop, Value};
 use cinematix_timeline::{Playhead, Snap, snap_t};
-use cinematix_ui::{Mods, Tokens};
+use cinematix_ui::{Mods, Rect, Tokens};
 use glam::{Quat, Vec3};
 
 pub const MIN_SPAN: f64 = 1.0 / 120.0;
@@ -114,6 +114,15 @@ pub enum Field {
     Focus,
     Aperture,
     Fps,
+    Width,
+    Height,
+    Time,
+    Rain,
+    Thunder,
+    FogStart,
+    FogEnd,
+    Shake,
+    ShakeFrequency,
 }
 
 pub fn fields_for(section: Section) -> &'static [Field] {
@@ -124,8 +133,17 @@ pub fn fields_for(section: Section) -> &'static [Field] {
             Field::Far,
             Field::Focus,
             Field::Aperture,
+            Field::Shake,
+            Field::ShakeFrequency,
         ],
-        Section::Render => &[Field::Fps],
+        Section::Render => &[Field::Fps, Field::Width, Field::Height],
+        Section::World => &[
+            Field::Time,
+            Field::Rain,
+            Field::Thunder,
+            Field::FogStart,
+            Field::FogEnd,
+        ],
         _ => &[],
     }
 }
@@ -139,6 +157,15 @@ impl Field {
             Field::Focus => (0.0, 256.0, 0.1),
             Field::Aperture => (1.0, 22.0, 0.1),
             Field::Fps => (1.0, 240.0, 1.0),
+            Field::Width => (16.0, 8192.0, 2.0),
+            Field::Height => (16.0, 8192.0, 2.0),
+            Field::Time => (0.0, 24_000.0, 100.0),
+            Field::Rain => (0.0, 1.0, 0.05),
+            Field::Thunder => (0.0, 1.0, 0.05),
+            Field::FogStart => (0.0, 512.0, 1.0),
+            Field::FogEnd => (0.0, 2048.0, 1.0),
+            Field::Shake => (0.0, 10.0, 0.1),
+            Field::ShakeFrequency => (0.0, 10.0, 0.1),
         }
     }
 
@@ -150,12 +177,30 @@ impl Field {
             Field::Focus => "cinematix.field.focus",
             Field::Aperture => "cinematix.field.aperture",
             Field::Fps => "cinematix.field.fps",
+            Field::Width => "cinematix.field.width",
+            Field::Height => "cinematix.field.height",
+            Field::Time => "cinematix.field.time",
+            Field::Rain => "cinematix.field.rain",
+            Field::Thunder => "cinematix.field.thunder",
+            Field::FogStart => "cinematix.field.fog_start",
+            Field::FogEnd => "cinematix.field.fog_end",
+            Field::Shake => "cinematix.field.shake",
+            Field::ShakeFrequency => "cinematix.field.shake_frequency",
         }
     }
 
     pub fn get(self, doc: &Document) -> f64 {
         match self {
             Field::Fps => doc.scene.meta.fps as f64,
+            Field::Width => f64::from(doc.scene.meta.resolution.0),
+            Field::Height => f64::from(doc.scene.meta.resolution.1),
+            Field::Time => f64::from(doc.scene.meta.environment.time.unwrap_or(6000.0)),
+            Field::Rain => f64::from(doc.scene.meta.environment.rain.unwrap_or(0.0)),
+            Field::Thunder => f64::from(doc.scene.meta.environment.thunder.unwrap_or(0.0)),
+            Field::FogStart => f64::from(doc.scene.meta.environment.fog_start.unwrap_or(0.0)),
+            Field::FogEnd => f64::from(doc.scene.meta.environment.fog_end.unwrap_or(128.0)),
+            Field::Shake => f64::from(doc.scene.meta.camera_fx.shake_amplitude),
+            Field::ShakeFrequency => f64::from(doc.scene.meta.camera_fx.shake_frequency),
             _ => match doc.camera_data() {
                 Some(c) => match self {
                     Field::Fov => c.fov_deg as f64,
@@ -164,6 +209,15 @@ impl Field {
                     Field::Focus => c.focus_distance as f64,
                     Field::Aperture => c.aperture as f64,
                     Field::Fps => doc.scene.meta.fps as f64,
+                    Field::Width => f64::from(doc.scene.meta.resolution.0),
+                    Field::Height => f64::from(doc.scene.meta.resolution.1),
+                    Field::Time
+                    | Field::Rain
+                    | Field::Thunder
+                    | Field::FogStart
+                    | Field::FogEnd
+                    | Field::Shake
+                    | Field::ShakeFrequency => 0.0,
                 },
                 None => 0.0,
             },
@@ -175,6 +229,15 @@ impl Field {
         let v = v.clamp(min, max);
         match self {
             Field::Fps => doc.scene.meta.fps = v as f32,
+            Field::Width => doc.scene.meta.resolution.0 = v as u32,
+            Field::Height => doc.scene.meta.resolution.1 = v as u32,
+            Field::Time => doc.scene.meta.environment.time = Some(v as f32),
+            Field::Rain => doc.scene.meta.environment.rain = Some(v as f32),
+            Field::Thunder => doc.scene.meta.environment.thunder = Some(v as f32),
+            Field::FogStart => doc.scene.meta.environment.fog_start = Some(v as f32),
+            Field::FogEnd => doc.scene.meta.environment.fog_end = Some(v as f32),
+            Field::Shake => doc.scene.meta.camera_fx.shake_amplitude = v as f32,
+            Field::ShakeFrequency => doc.scene.meta.camera_fx.shake_frequency = v as f32,
             _ => {
                 if let Some(c) = doc.camera_data_mut() {
                     match self {
@@ -183,7 +246,16 @@ impl Field {
                         Field::Far => c.far = v as f32,
                         Field::Focus => c.focus_distance = v as f32,
                         Field::Aperture => c.aperture = v as f32,
-                        Field::Fps => {}
+                        Field::Fps
+                        | Field::Width
+                        | Field::Height
+                        | Field::Time
+                        | Field::Rain
+                        | Field::Thunder
+                        | Field::FogStart
+                        | Field::FogEnd
+                        | Field::Shake
+                        | Field::ShakeFrequency => {}
                     }
                 }
             }
@@ -193,7 +265,7 @@ impl Field {
     pub fn text(self, doc: &Document) -> String {
         let v = self.get(doc);
         match self {
-            Field::Near => format!("{v:.2}"),
+            Field::Near | Field::Rain | Field::Thunder => format!("{v:.2}"),
             Field::Focus | Field::Aperture => format!("{v:.1}"),
             _ => format!("{v:.0}"),
         }
@@ -226,6 +298,7 @@ pub enum KeyResult {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Request {
     Save,
+    Render,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -257,6 +330,37 @@ enum Drag {
         start: f32,
         x: f32,
     },
+    Panel {
+        grab: (f32, f32),
+        start: (f32, f32),
+        detached: bool,
+    },
+    Bezier {
+        chan: usize,
+        key: usize,
+        a: (f32, f32),
+        b: (f32, f32),
+        which: u8,
+    },
+}
+
+/// The screen positions of key `ki` and the key after it in the curve plot, for handle geometry.
+fn curve_key_xy(
+    f: &Frame,
+    ch: &cinematix_anim::Channel,
+    axis: usize,
+    ki: usize,
+) -> Option<((f32, f32), (f32, f32))> {
+    let next = ch.keys.get(ki + 1)?;
+    let (lo, hi) = crate::curve::range(ch, axis)?;
+    let y =
+        |v: f64| f.curve_plot.y + f.curve_plot.h * (1.0 - ((v - lo) / (hi - lo).max(1e-9)) as f32);
+    let a = (
+        f.axis.x(ch.keys[ki].t),
+        y(crate::curve::component(ch.keys[ki].v, axis)?),
+    );
+    let b = (f.axis.x(next.t), y(crate::curve::component(next.v, axis)?));
+    Some((a, b))
 }
 
 pub struct Editor {
@@ -269,11 +373,18 @@ pub struct Editor {
     pub selected_channel: Option<usize>,
     pub selected_key: Option<(usize, usize)>,
     pub selected_node: Option<cinematix_scene::NodeId>,
+    pub selected_clip: Option<usize>,
     pub status: Option<&'static str>,
     /// The bottom dock's share of the stage, and the inspector's share of the width.
     pub tab: crate::frame::TimelineTab,
+    pub inspector_tab: crate::frame::InspectorTab,
+    /// The inspector's rect while it is torn out of the right dock, as a floating panel.
+    pub inspector_float: Option<Rect>,
     pub curve_axis: usize,
     pub expanded: std::collections::HashSet<cinematix_scene::NodeId>,
+    /// Bumped whenever the document changes, so the world overlay re-resolves after an undo or a
+    /// load even when the playhead has not moved.
+    pub revision: u64,
     pub timeline_frac: f32,
     pub inspector_frac: f32,
     request: Option<Request>,
@@ -308,10 +419,14 @@ impl Editor {
             selected_channel: None,
             selected_key: None,
             selected_node: None,
+            selected_clip: None,
             status: None,
             tab: crate::frame::TimelineTab::DopeSheet,
+            inspector_tab: crate::frame::InspectorTab::Properties,
+            inspector_float: None,
             curve_axis: 0,
             expanded: Default::default(),
+            revision: 0,
             timeline_frac: 0.38,
             inspector_frac: 0.22,
             request: None,
@@ -347,6 +462,8 @@ impl Editor {
             self.inspector_frac,
             self.selected_channel,
             &self.expanded,
+            self.inspector_tab,
+            self.inspector_float,
         )
         .with_window(self.t0, self.t1)
     }
@@ -360,6 +477,7 @@ impl Editor {
         }
         self.history.push(self.doc.clone());
         self.redo.clear();
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn can_undo(&self) -> bool {
@@ -390,6 +508,7 @@ impl Editor {
 
     fn restore(&mut self, doc: Document) {
         self.doc = doc;
+        self.revision = self.revision.wrapping_add(1);
         let channels = self.doc.channels.len();
         if self.selected_channel.is_some_and(|ci| ci >= channels) {
             self.selected_channel = None;
@@ -404,6 +523,12 @@ impl Editor {
             .is_some_and(|id| !self.doc.scene.nodes.contains_key(&id))
         {
             self.selected_node = None;
+        }
+        if self
+            .selected_clip
+            .is_some_and(|ci| ci >= self.doc.scene.meta.clips.len())
+        {
+            self.selected_clip = None;
         }
         self.seek(self.playhead.t);
     }
@@ -646,7 +771,7 @@ impl Editor {
                     crate::frame::Tool::Redo => {
                         self.redo();
                     }
-                    crate::frame::Tool::Render => {}
+                    crate::frame::Tool::Render => self.request = Some(Request::Render),
                 }
                 return true;
             }
@@ -665,21 +790,21 @@ impl Editor {
             });
             return true;
         }
+        if self.press_inspector(&f, pos) {
+            return true;
+        }
         for (tab, r) in &f.tabs {
             if r.contains(pos.0, pos.1) {
-                match tab {
-                    crate::frame::TimelineTab::DopeSheet | crate::frame::TimelineTab::Curves => {
-                        self.tab = *tab;
-                    }
-                    crate::frame::TimelineTab::Clips => {}
-                }
+                self.tab = *tab;
                 return true;
             }
         }
-        for (axis, r) in &f.curve_axes {
-            if r.contains(pos.0, pos.1) {
-                self.curve_axis = *axis;
-                return true;
+        if self.tab == crate::frame::TimelineTab::Curves {
+            for (axis, r) in &f.curve_axes {
+                if r.contains(pos.0, pos.1) {
+                    self.curve_axis = *axis;
+                    return true;
+                }
             }
         }
         if self.tab == crate::frame::TimelineTab::Curves
@@ -687,6 +812,35 @@ impl Editor {
             && let Some(ci) = self.selected_channel
             && let Some(ch) = self.doc.channel(ci)
         {
+            if let Some((sci, ski)) = self.selected_key
+                && sci == ci
+                && let Some(cinematix_anim::Interp::Bezier { out, in_ }) =
+                    ch.keys.get(ski).map(|k| k.interp)
+                && let Some((a, b)) = curve_key_xy(&f, ch, self.curve_axis, ski)
+            {
+                let hit = |c: [f32; 2]| {
+                    let (hx, hy) = crate::curve::handle_pos(a, b, c);
+                    (pos.0 - hx).abs() <= 6.0 && (pos.1 - hy).abs() <= 6.0
+                };
+                let which = if hit(out) {
+                    Some(0)
+                } else if hit(in_) {
+                    Some(1)
+                } else {
+                    None
+                };
+                if let Some(which) = which {
+                    self.checkpoint();
+                    self.drag = Some(Drag::Bezier {
+                        chan: ci,
+                        key: ski,
+                        a,
+                        b,
+                        which,
+                    });
+                    return true;
+                }
+            }
             let times: Vec<f64> = ch.keys.iter().map(|k| k.t).collect();
             if let Some(ki) = cinematix_timeline::hit_key(pos.0, &f.axis, &times, 6.0)
                 && let Some((lo, hi)) = crate::curve::range(ch, self.curve_axis)
@@ -720,34 +874,29 @@ impl Editor {
                 return true;
             }
         }
-        for (field, r) in &f.fields {
-            if r.contains(pos.0, pos.1) {
-                // A click on the track sets the value from the position, as
-                // `AbstractSliderButton` does, and a drag then scrubs from there.
-                let (min, max, step) = field.range();
-                let track = (r.w - 8.0).max(1.0);
-                let frac = f64::from((pos.0 - r.x - 4.0) / track);
-                let scrub = cinematix_ui::Scrubber::new(field.get(&self.doc), min, max, step);
-                field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
-                self.drag = Some(Drag::Number {
-                    field: *field,
-                    start: field.get(&self.doc),
-                    start_x: pos.0,
-                });
+        if self.tab == crate::frame::TimelineTab::Clips {
+            if f.clip_add.contains(pos.0, pos.1) {
+                self.add_clip();
                 return true;
             }
-        }
-        for (id, r) in &f.tree_toggle {
-            if r.contains(pos.0, pos.1) {
-                if !self.expanded.remove(id) {
-                    self.expanded.insert(*id);
+            for (i, r) in &f.clip_delete {
+                if r.contains(pos.0, pos.1) {
+                    self.delete_clip(*i);
+                    return true;
                 }
-                return true;
             }
-        }
-        for (id, _, _, r) in &f.tree {
-            if r.contains(pos.0, pos.1) {
-                self.selected_node = Some(*id);
+            for (i, r) in &f.clips {
+                if r.contains(pos.0, pos.1) {
+                    if let Some(clip) = self.doc.scene.meta.clips.get(*i) {
+                        let (start, end) = (clip.start, clip.end);
+                        self.selected_clip = Some(*i);
+                        self.set_window(start, end.max(start + MIN_SPAN));
+                        self.seek(start);
+                    }
+                    return true;
+                }
+            }
+            if f.lanes.contains(pos.0, pos.1) {
                 return true;
             }
         }
@@ -782,6 +931,88 @@ impl Editor {
             }
         }
         true
+    }
+
+    /// The inspector's own controls: its tabs, the redock button, the header drag, the numeric
+    /// fields and the scene rows. A floating inspector also swallows clicks on its empty space so
+    /// the timeline underneath never sees them.
+    fn press_inspector(&mut self, f: &Frame, pos: (f32, f32)) -> bool {
+        for (tab, r) in &f.inspector_tabs {
+            if r.contains(pos.0, pos.1) {
+                self.inspector_tab = *tab;
+                return true;
+            }
+        }
+        if let Some(r) = f.inspector_redock
+            && r.contains(pos.0, pos.1)
+        {
+            self.inspector_float = None;
+            return true;
+        }
+        if f.inspector_header.contains(pos.0, pos.1) {
+            self.drag = Some(Drag::Panel {
+                grab: (pos.0 - f.inspector.x, pos.1 - f.inspector.y),
+                start: pos,
+                detached: f.inspector_floating,
+            });
+            return true;
+        }
+        for (field, r) in &f.fields {
+            if r.contains(pos.0, pos.1) {
+                // A click on the track sets the value from the position, as
+                // `AbstractSliderButton` does, and a drag then scrubs from there.
+                let (min, max, step) = field.range();
+                let track = (r.w - 8.0).max(1.0);
+                let frac = f64::from((pos.0 - r.x - 4.0) / track);
+                let scrub = cinematix_ui::Scrubber::new(field.get(&self.doc), min, max, step);
+                self.checkpoint();
+                field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
+                self.drag = Some(Drag::Number {
+                    field: *field,
+                    start: field.get(&self.doc),
+                    start_x: pos.0,
+                });
+                return true;
+            }
+        }
+        for (id, r) in &f.tree_toggle {
+            if r.contains(pos.0, pos.1) {
+                if !self.expanded.remove(id) {
+                    self.expanded.insert(*id);
+                }
+                return true;
+            }
+        }
+        for (id, _, _, r) in &f.tree {
+            if r.contains(pos.0, pos.1) {
+                self.selected_node = Some(*id);
+                return true;
+            }
+        }
+        f.inspector_floating && f.inspector.contains(pos.0, pos.1)
+    }
+
+    fn add_clip(&mut self) {
+        let (r0, r1) = self.range();
+        let start = self.t0.max(r0).min(r1);
+        let end = self.t1.max(start + f64::from(1.0 / self.fps())).min(r1);
+        self.checkpoint();
+        let name = format!("Clip {}", self.doc.scene.meta.clips.len() + 1);
+        self.doc
+            .scene
+            .meta
+            .clips
+            .push(cinematix_scene::Clip { name, start, end });
+        self.selected_clip = Some(self.doc.scene.meta.clips.len() - 1);
+    }
+
+    fn delete_clip(&mut self, i: usize) {
+        if i >= self.doc.scene.meta.clips.len() {
+            return;
+        }
+        self.checkpoint();
+        self.doc.scene.meta.clips.remove(i);
+        self.selected_clip = None;
     }
 
     fn press_button(&mut self, b: Button) {
@@ -859,6 +1090,51 @@ impl Editor {
                 self.inspector_frac = (start + (x - pos.0) / width).clamp(0.12, 0.4);
                 true
             }
+            Drag::Bezier {
+                chan,
+                key,
+                a,
+                b,
+                which,
+            } => {
+                let [u, v] = crate::curve::handle_param(a, b, pos);
+                match self
+                    .doc
+                    .channels
+                    .get_mut(chan)
+                    .and_then(|c| c.keys.get_mut(key))
+                    .map(|k| &mut k.interp)
+                {
+                    Some(cinematix_anim::Interp::Bezier { out, in_ }) => {
+                        if which == 0 {
+                            *out = [u, v];
+                        } else {
+                            *in_ = [u, v];
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            Drag::Panel {
+                grab,
+                start,
+                detached,
+            } => {
+                if !detached && (pos.0 - start.0).abs() + (pos.1 - start.1).abs() < 4.0 {
+                    return true;
+                }
+                let rect = self.inspector_float.unwrap_or(f.inspector);
+                let max_x = (self.size.0 - rect.w).max(0.0);
+                let max_y = (self.size.1 - rect.h).max(0.0);
+                let x = (pos.0 - grab.0).clamp(0.0, max_x);
+                let y = (pos.1 - grab.1).clamp(0.0, max_y);
+                self.inspector_float = Some(Rect::new(x, y, rect.w, rect.h));
+                if let Some(Drag::Panel { detached, .. }) = self.drag.as_mut() {
+                    *detached = true;
+                }
+                true
+            }
             Drag::CurveKey {
                 chan,
                 key,
@@ -881,7 +1157,11 @@ impl Editor {
         }
     }
 
-    pub fn release(&mut self) -> bool {
+    pub fn release(&mut self, pos: (f32, f32)) -> bool {
+        let panel = matches!(self.drag, Some(Drag::Panel { .. }));
+        if panel && self.inspector_float.is_some() && pos.0 >= self.size.0 - 48.0 {
+            self.inspector_float = None;
+        }
         self.drag.take().is_some()
     }
 
@@ -889,9 +1169,117 @@ impl Editor {
         self.drag.is_some()
     }
 
+    pub fn dragging_panel(&self) -> bool {
+        matches!(self.drag, Some(Drag::Panel { .. }))
+    }
+
     /// Whether this field is the one under an active pointer drag, so it draws held.
     pub fn dragging_field(&self, field: Field) -> bool {
         matches!(self.drag, Some(Drag::Number { field: dragged, .. }) if dragged == field)
+    }
+
+    /// Replaces the camera's translation and rotation keys with a generated path. One checkpoint
+    /// covers the whole replacement, so a whole orbit undoes in one step.
+    fn write_camera_path(&mut self, points: &[(f64, Vec3, Quat)], rotations: bool) -> bool {
+        if points.is_empty() {
+            return false;
+        }
+        let id = self.doc.scene.camera;
+        self.checkpoint();
+        let Some(ti) = self.doc.channel_index(id, Prop::Translation) else {
+            return false;
+        };
+        self.doc.channels[ti].keys = points
+            .iter()
+            .map(|(t, p, _)| cinematix_anim::Key {
+                t: *t,
+                v: Value::Vec3(p.to_array()),
+                interp: Interp::Spline,
+            })
+            .collect();
+        if rotations && let Some(ri) = self.doc.channel_index(id, Prop::Rotation) {
+            self.doc.channels[ri].keys = points
+                .iter()
+                .map(|(t, _, q)| cinematix_anim::Key {
+                    t: *t,
+                    v: Value::Quat(q.to_array()),
+                    interp: Interp::Spline,
+                })
+                .collect();
+        }
+        self.selected_channel = Some(ti);
+        self.selected_key = Some((ti, 0));
+        self.seek(points[0].0);
+        self.status = Some("cinematix.status.path");
+        true
+    }
+
+    /// Keys a camera orbit around `center`: `frames` segments at the film's fps, starting at the
+    /// camera's current bearing, at `height` (or its current height).
+    pub fn orbit(&mut self, center: Vec3, radius: f32, frames: u32, height: Option<f32>) -> bool {
+        let radius = radius.max(0.01);
+        let frames = frames.max(1);
+        let (current, _) = match self.camera_at(self.playhead.t) {
+            Some(pose) => pose,
+            None => return false,
+        };
+        let y = height.unwrap_or(current.y);
+        let angle = (current.x - center.x).atan2(current.z - center.z);
+        let fps = f64::from(self.fps());
+        let look = Vec3::new(center.x, center.y, center.z);
+        let points: Vec<(f64, Vec3, Quat)> = (0..=frames)
+            .map(|i| {
+                let a = angle + std::f32::consts::TAU * i as f32 / frames as f32;
+                let p = Vec3::new(center.x + radius * a.sin(), y, center.z + radius * a.cos());
+                let (yaw, pitch) = look_at(p, look);
+                (f64::from(i) / fps, p, rotation_from_view(yaw, pitch))
+            })
+            .collect();
+        self.write_camera_path(&points, true)
+    }
+
+    /// Keys a straight camera move from its pose at the playhead by `delta`, over `frames`.
+    pub fn dolly(&mut self, delta: Vec3, frames: u32) -> bool {
+        let frames = frames.max(1);
+        let (current, rotation) = match self.camera_at(self.playhead.t) {
+            Some(pose) => pose,
+            None => return false,
+        };
+        let fps = f64::from(self.fps());
+        let t0 = self.playhead.t;
+        let points = [
+            (t0, current, rotation),
+            (t0 + f64::from(frames) / fps, current + delta, rotation),
+        ];
+        self.write_camera_path(&points, false)
+    }
+
+    /// Keys a camera path through `points`, looking along it, over `frames` segments.
+    pub fn rail(&mut self, points: &[Vec3], frames: u32) -> bool {
+        if points.len() < 2 {
+            return false;
+        }
+        let frames = frames.max(1);
+        let fps = f64::from(self.fps());
+        let last = points.len() - 1;
+        let poses: Vec<(f64, Vec3, Quat)> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let target = if i < last {
+                    points[i + 1]
+                } else {
+                    points[i - 1]
+                };
+                let (yaw, pitch) = look_at(*p, target);
+                (
+                    f64::from(i as u32) * f64::from(frames) / fps / last as f64,
+                    *p,
+                    rotation_from_view(yaw, pitch),
+                )
+            })
+            .collect();
+        self.write_camera_path(&poses, true)
     }
 
     /// The camera node's pose at `t`: the animated value when the channel holds keys, the rest
@@ -918,7 +1306,16 @@ impl Editor {
     /// playhead, as `camera_view` hands it over.
     pub fn preview_view(&self) -> Option<([f64; 3], f32, f32)> {
         let (position, rotation) = self.camera_at(self.playhead.t)?;
-        let (yaw, pitch) = view_from_rotation(rotation);
+        let (mut yaw, mut pitch) = view_from_rotation(rotation);
+        let fx = &self.doc.scene.meta.camera_fx;
+        if fx.shake_amplitude > 0.0 && fx.shake_frequency > 0.0 {
+            let phase = self.playhead.t * f64::from(fx.shake_frequency) * std::f64::consts::TAU;
+            yaw +=
+                fx.shake_amplitude * ((phase * 1.0).sin() * 0.7 + (phase * 2.3).sin() * 0.3) as f32;
+            pitch +=
+                fx.shake_amplitude * ((phase * 1.3).cos() * 0.6 + (phase * 3.1).cos() * 0.4) as f32;
+            pitch = pitch.clamp(-89.9, 89.9);
+        }
         Some((
             [
                 f64::from(position.x),
@@ -953,9 +1350,6 @@ impl Editor {
         }
         self.checkpoint();
         let rotation = rotation_from_view(yaw, pitch);
-        if !force && self.doc.camera_keyed() {
-            return false;
-        }
         if self.doc.camera_keyed() {
             let id = self.doc.scene.camera;
             let t = self.playhead.t;
@@ -1105,6 +1499,20 @@ pub fn view_from_rotation(q: Quat) -> (f32, f32) {
     (yaw, (-x.to_degrees()).clamp(-89.9, 89.9))
 }
 
+/// The view angles that look from `from` at `to`, in Minecraft's yaw (0 looks +Z) and pitch
+/// (positive looks down).
+pub fn look_at(from: Vec3, to: Vec3) -> (f32, f32) {
+    let d = (to - from).normalize_or_zero();
+    let mut yaw = 180.0 - (-d.x).atan2(-d.z).to_degrees();
+    while yaw <= -180.0 {
+        yaw += 360.0;
+    }
+    while yaw > 180.0 {
+        yaw -= 360.0;
+    }
+    (yaw, (-d.y.asin().to_degrees()).clamp(-89.9, 89.9))
+}
+
 fn window_for(r0: f64, r1: f64) -> (f64, f64) {
     let (a, b) = if r1 > r0 { (r0, r1) } else { (r0, r0 + 1.0) };
     let pad = ((b - a) * 0.02).max(MIN_SPAN);
@@ -1149,7 +1557,7 @@ mod tests {
             Mods::default(),
         );
         assert!(e.time() > (mid.0 + mid.1) * 0.5);
-        assert!(e.release());
+        assert!(e.release((0.0, 0.0)));
         assert!(!e.dragging());
     }
 
@@ -1201,7 +1609,7 @@ mod tests {
         };
         e.drag_to(at(r), Mods::default());
         let coarse = Field::Fov.get(&e.doc);
-        e.release();
+        e.release((0.0, 0.0));
 
         let mut e = editor();
         let r = press_handle(&mut e, Field::Fov);
@@ -1213,7 +1621,7 @@ mod tests {
             },
         );
         let shifted = Field::Fov.get(&e.doc);
-        e.release();
+        e.release((0.0, 0.0));
 
         let mut e = editor();
         let r = press_handle(&mut e, Field::Fov);
@@ -1461,7 +1869,7 @@ mod tests {
         assert_eq!(field, Field::Fov);
         let mid = r.x + r.w * 0.5;
         e.press((mid, r.y + 5.0), Mods::default());
-        e.release();
+        e.release((0.0, 0.0));
         let v = Field::Fov.get(&e.doc);
         assert!((v - 90.0).abs() < 3.0, "{v}");
     }
@@ -1475,7 +1883,7 @@ mod tests {
         assert!(e.press(p, Mods::default()));
         assert!(e.drag_to((p.0, p.1 - 40.0), Mods::default()));
         assert!(e.timeline_frac > before, "{}", e.timeline_frac);
-        e.release();
+        e.release((0.0, 0.0));
 
         let f = e.frame();
         let before = e.inspector_frac;
@@ -1614,6 +2022,7 @@ mod tests {
         }
         e.doc.sync_channels();
         e.expanded.insert(cinematix_scene::NodeId(1));
+        e.inspector_tab = crate::frame::InspectorTab::Scene;
         let f = e.frame();
         assert!(
             f.tree
@@ -1634,6 +2043,229 @@ mod tests {
                 .iter()
                 .any(|(id, _, _, _)| *id == cinematix_scene::NodeId(3))
         );
+    }
+
+    #[test]
+    fn the_inspector_tabs_switch_between_properties_and_the_scene() {
+        let mut e = editor();
+        let f = e.frame();
+        assert!(!f.fields.is_empty());
+        assert!(f.tree.is_empty());
+        let (_, scene) = *f
+            .inspector_tabs
+            .iter()
+            .find(|(t, _)| *t == crate::frame::InspectorTab::Scene)
+            .unwrap();
+        assert!(e.press((scene.x + 4.0, scene.y + 4.0), Mods::default()));
+        assert_eq!(e.inspector_tab, crate::frame::InspectorTab::Scene);
+        let f = e.frame();
+        assert!(f.fields.is_empty());
+        assert!(!f.tree.is_empty());
+        let (_, props) = *f
+            .inspector_tabs
+            .iter()
+            .find(|(t, _)| *t == crate::frame::InspectorTab::Properties)
+            .unwrap();
+        assert!(e.press((props.x + 4.0, props.y + 4.0), Mods::default()));
+        assert_eq!(e.inspector_tab, crate::frame::InspectorTab::Properties);
+    }
+
+    #[test]
+    fn dragging_the_panel_header_tears_it_out_and_the_dock_button_puts_it_back() {
+        let mut e = editor();
+        let f = e.frame();
+        let at = (
+            f.inspector_header.x + f.inspector_header.w - 40.0,
+            f.inspector_header.y + 8.0,
+        );
+        assert!(e.press(at, Mods::default()));
+        assert!(e.dragging_panel());
+        e.drag_to((at.0 - 120.0, at.1 + 60.0), Mods::default());
+        let float = e.inspector_float.expect("a floating panel");
+        assert!(float.x < f.inspector.x);
+        e.release((at.0 - 120.0, at.1 + 60.0));
+        let f = e.frame();
+        assert!(f.inspector_floating);
+        assert!(f.viewport.w > f.timeline.x - f.viewport.x);
+        let dock = f.inspector_redock.unwrap();
+        assert!(e.press((dock.x + 4.0, dock.y + 4.0), Mods::default()));
+        assert!(e.inspector_float.is_none());
+        assert!(!e.frame().inspector_floating);
+    }
+
+    #[test]
+    fn releasing_a_floating_panel_at_the_right_edge_docks_it() {
+        let mut e = editor();
+        e.inspector_float = Some(Rect::new(300.0, 120.0, 220.0, 260.0));
+        let f = e.frame();
+        let at = (
+            f.inspector_header.x + f.inspector_header.w - 40.0,
+            f.inspector_header.y + 8.0,
+        );
+        assert!(e.press(at, Mods::default()));
+        e.drag_to((e.size().0 - 2.0, 200.0), Mods::default());
+        e.release((e.size().0 - 2.0, 200.0));
+        assert!(e.inspector_float.is_none());
+    }
+
+    #[test]
+    fn a_bezier_handle_can_be_dragged_in_time_and_value() {
+        let mut e = editor();
+        e.seek_frame(0);
+        assert!(e.add_key());
+        e.seek_frame(24);
+        e.selected_channel = e.selected_channel.or(Some(0));
+        let ci = e.active_channel().unwrap();
+        e.doc.channels[ci].keys[0].v = Value::Vec3([0.0, 0.0, 0.0]);
+        e.doc
+            .upsert_key(ci, 1.0, Value::Vec3([10.0, 0.0, 0.0]))
+            .unwrap();
+        e.doc.channels[ci].keys[0].interp = Interp::Bezier {
+            out: [0.42, 0.0],
+            in_: [0.58, 1.0],
+        };
+        e.doc.channels[ci].keys.sort_by(|a, b| a.t.total_cmp(&b.t));
+        e.selected_channel = Some(ci);
+        e.selected_key = Some((ci, 0));
+        e.curve_axis = 0;
+        e.tab = crate::frame::TimelineTab::Curves;
+        let f = e.frame();
+        let ch = e.doc.channel(ci).unwrap();
+        let (a, b) = curve_key_xy(&f, ch, 0, 0).unwrap();
+        let (hx, hy) = crate::curve::handle_pos(a, b, [0.42, 0.0]);
+        assert!(e.press((hx, hy), Mods::default()));
+        assert!(e.dragging());
+        e.drag_to((hx + 40.0, hy + 30.0), Mods::default());
+        match e.doc.channels[ci].keys[0].interp {
+            Interp::Bezier { out, .. } => assert!(out != [0.42, 0.0], "{out:?}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(e.undo());
+    }
+
+    #[test]
+    fn the_world_section_sets_environment_overrides() {
+        let mut e = editor();
+        e.section = Section::World;
+        let f = e.frame();
+        assert_eq!(f.fields.len(), 5);
+        let (time, r) = *f.fields.iter().find(|(x, _)| *x == Field::Time).unwrap();
+        assert_eq!(time, Field::Time);
+        let track = (r.w - 8.0).max(1.0);
+        assert!(e.press((r.x + 4.0 + track * 0.75, r.y + 8.0), Mods::default()));
+        let env = &e.doc.scene.meta.environment;
+        assert!(env.time.is_some_and(|t| t > 15_000.0), "{:?}", env.time);
+        e.release((0.0, 0.0));
+        let (rain, r) = *f.fields.iter().find(|(x, _)| *x == Field::Rain).unwrap();
+        assert_eq!(rain, Field::Rain);
+        assert!(e.press((r.x + 4.0 + track, r.y + 8.0), Mods::default()));
+        assert!(e.doc.scene.meta.environment.rain.is_some_and(|v| v > 0.9));
+    }
+
+    #[test]
+    fn clips_can_be_added_selected_and_deleted() {
+        let mut e = editor();
+        let f = e.frame();
+        let (_, clips) = *f
+            .tabs
+            .iter()
+            .find(|(t, _)| *t == crate::frame::TimelineTab::Clips)
+            .unwrap();
+        assert!(e.press((clips.x + 4.0, clips.y + 4.0), Mods::default()));
+        assert_eq!(e.tab, crate::frame::TimelineTab::Clips);
+        let f = e.frame();
+        assert!(e.press((f.clip_add.x + 4.0, f.clip_add.y + 4.0), Mods::default()));
+        assert_eq!(e.doc.scene.meta.clips.len(), 1);
+        let clip = &e.doc.scene.meta.clips[0];
+        assert_eq!(clip.name, "Clip 1");
+        assert!(clip.end > clip.start);
+        let f = e.frame();
+        let (i, row) = f.clips[0];
+        assert_eq!(i, 0);
+        assert!(e.press((row.x + 4.0, row.y + 4.0), Mods::default()));
+        assert_eq!(e.selected_clip, Some(0));
+        assert!((e.window().0 - e.doc.scene.meta.clips[0].start).abs() < 1e-6);
+        let f = e.frame();
+        let (_, del) = f.clip_delete[0];
+        assert!(e.press((del.x + 4.0, del.y + 4.0), Mods::default()));
+        assert!(e.doc.scene.meta.clips.is_empty());
+        assert!(e.undo());
+        assert_eq!(e.doc.scene.meta.clips.len(), 1);
+    }
+
+    #[test]
+    fn look_at_matches_the_camera_convention() {
+        let (yaw, pitch) = look_at(Vec3::ZERO, Vec3::new(0.0, 0.0, 10.0));
+        assert!(yaw.abs() < 0.01, "{yaw}");
+        assert!(pitch.abs() < 0.01);
+        let (yaw, _) = look_at(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0));
+        assert!((yaw + 90.0).abs() < 0.01, "{yaw}");
+        let (_, pitch) = look_at(Vec3::ZERO, Vec3::new(0.0, -10.0, 0.0));
+        assert!((pitch - 89.9).abs() < 0.01, "{pitch}");
+    }
+
+    #[test]
+    fn an_orbit_replaces_the_camera_path_and_returns_to_its_start() {
+        let mut e = editor();
+        let id = e.doc.scene.camera;
+        assert!(e.orbit(Vec3::new(10.0, 64.0, 0.0), 10.0, 48, Some(70.0)));
+        let ti = e.doc.channel_index(id, Prop::Translation).unwrap();
+        let ri = e.doc.channel_index(id, Prop::Rotation).unwrap();
+        assert_eq!(e.doc.channels[ti].keys.len(), 49);
+        assert_eq!(e.doc.channels[ri].keys.len(), 49);
+        let first = match e.doc.channels[ti].keys[0].v {
+            Value::Vec3(v) => Vec3::from_array(v),
+            other => panic!("{other:?}"),
+        };
+        let last = match e.doc.channels[ti].keys[48].v {
+            Value::Vec3(v) => Vec3::from_array(v),
+            other => panic!("{other:?}"),
+        };
+        assert!((first - last).length() < 0.01, "{first} {last}");
+        assert!((first.distance(Vec3::new(10.0, 70.0, 0.0)) - 10.0).abs() < 0.01);
+        assert!((e.doc.channels[ti].keys[12].t - 0.5).abs() < 1e-9);
+        assert!(e.undo());
+        assert!(e.doc.channels[ti].keys.is_empty());
+    }
+
+    #[test]
+    fn a_dolly_keys_the_move_and_a_rail_keys_each_point() {
+        let mut e = editor();
+        let id = e.doc.scene.camera;
+        e.doc.set_camera_translation(Vec3::new(1.0, 2.0, 3.0));
+        assert!(e.dolly(Vec3::new(0.0, 0.0, 5.0), 24));
+        let ci = e.doc.channel_index(id, Prop::Translation).unwrap();
+        assert_eq!(e.doc.channels[ci].keys.len(), 2);
+        match e.doc.channels[ci].keys[1].v {
+            Value::Vec3(v) => {
+                assert!((Vec3::from_array(v) - Vec3::new(1.0, 2.0, 8.0)).length() < 1e-6)
+            }
+            other => panic!("{other:?}"),
+        }
+        let pts = [
+            Vec3::new(0.0, 64.0, 0.0),
+            Vec3::new(0.0, 64.0, 10.0),
+            Vec3::new(10.0, 64.0, 10.0),
+        ];
+        assert!(e.rail(&pts, 48));
+        assert_eq!(e.doc.channels[ci].keys.len(), 3);
+        assert!((e.doc.channels[ci].keys[2].t - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn camera_shake_is_deterministic_and_moves_with_time() {
+        let mut e = editor();
+        e.seek(0.25);
+        let base = e.preview_view().unwrap();
+        e.doc.scene.meta.camera_fx.shake_amplitude = 2.0;
+        e.doc.scene.meta.camera_fx.shake_frequency = 1.5;
+        let a = e.preview_view().unwrap();
+        let b = e.preview_view().unwrap();
+        assert_eq!(a, b);
+        assert!((a.1 - base.1).abs() > 1e-4 || (a.2 - base.2).abs() > 1e-4);
+        e.seek(0.5);
+        let c = e.preview_view().unwrap();
+        assert!((c.1 - a.1).abs() > 1e-4 || (c.2 - a.2).abs() > 1e-4);
     }
 
     #[test]

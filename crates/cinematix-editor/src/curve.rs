@@ -44,6 +44,32 @@ pub fn set_component(v: &mut Value, axis: usize, value: f32) -> bool {
     }
 }
 
+/// Where a Bezier control point sits between two keys drawn at `a` and `b`. The value axis has
+/// no extent on a flat segment, so those handles use a fixed 40-pixel spread instead of a
+/// degenerate one.
+pub fn handle_pos(a: (f32, f32), b: (f32, f32), c: [f32; 2]) -> (f32, f32) {
+    let dy = b.1 - a.1;
+    let y = if dy.abs() > 2.0 {
+        a.1 + dy * c[1]
+    } else {
+        a.1 + (c[1] - 0.5) * 40.0
+    };
+    (a.0 + (b.0 - a.0) * c[0], y)
+}
+
+/// The inverse of [`handle_pos`]: a dragged handle's normalised time and value.
+pub fn handle_param(a: (f32, f32), b: (f32, f32), p: (f32, f32)) -> [f32; 2] {
+    let dx = (b.0 - a.0).abs().max(1e-3);
+    let dy = b.1 - a.1;
+    let u = ((p.0 - a.0) / dx).clamp(0.0, 1.0);
+    let v = if dy.abs() > 2.0 {
+        (p.1 - a.1) / dy
+    } else {
+        (p.1 - a.1) / 40.0 + 0.5
+    };
+    [u, v.clamp(-1.0, 2.0)]
+}
+
 /// The lowest and highest component across the channel's keys, with a margin so a flat curve is
 /// still visible.
 pub fn range(channel: &Channel, axis: usize) -> Option<(f64, f64)> {

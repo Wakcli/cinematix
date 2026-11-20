@@ -267,6 +267,24 @@ mod tests {
     }
 
     #[test]
+    fn the_environment_round_trips_and_defaults_when_absent() {
+        let path = temp_path();
+        let mut doc = animated();
+        doc.scene.meta.environment.time = Some(18_000.0);
+        doc.scene.meta.environment.rain = Some(0.75);
+        doc.scene.meta.environment.fog_start = Some(24.0);
+        doc.scene.meta.environment.fog_end = Some(96.0);
+        save(&path, &doc, Stamp::default()).unwrap();
+        let loaded = load(&path).unwrap();
+        let env = &loaded.scene.meta.environment;
+        assert_eq!(env.time, Some(18_000.0));
+        assert_eq!(env.rain, Some(0.75));
+        assert_eq!(env.fog_end, Some(96.0));
+        assert!(env.thunder.is_none());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn a_newer_format_is_refused_with_its_version() {
         let path = temp_path();
         let file = File::create(&path).unwrap();

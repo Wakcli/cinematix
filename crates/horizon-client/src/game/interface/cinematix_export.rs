@@ -37,6 +37,8 @@ pub(super) struct Render {
     stalls: u32,
     /// Redraws still to give a freshly remeshed layer before the frame is drawn.
     settle: u32,
+    /// Frames that already existed when a resumed job started.
+    resumed: u32,
     reply: Option<Sender<String>>,
     saved_size: [u32; 2],
     saved_playhead: f64,
@@ -45,6 +47,20 @@ pub(super) struct Render {
 }
 
 impl Render {
+    /// What `cinematix status` reports while a job runs.
+    pub(super) fn progress(&self) -> Value {
+        json!({
+            "start": self.start,
+            "end": self.end,
+            "next": self.next,
+            "done": self.next.saturating_sub(self.start),
+            "fps": self.fps,
+            "size": [self.width, self.height],
+            "path": self.dir.display().to_string(),
+            "video": self.video.as_ref().map(|v| v.display().to_string()),
+        })
+    }
+
     /// The shader pack's clock: this film frame, counted from the render's first.
     pub(super) fn timing(&self) -> FrameTiming {
         let n = self.next.saturating_sub(self.start).saturating_add(1);
@@ -54,6 +70,27 @@ impl Render {
     fn frame_path(&self, frame: u32) -> PathBuf {
         self.dir.join(format!("frame_{frame:06}.png"))
     }
+}
+
+/// The first frame a resumed job still has to draw, and how many of its range already exist.
+fn scan_frames(dir: &Path, start: u32, end: u32) -> (u32, u32) {
+    let mut have = std::collections::HashSet::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(n) = name
+                .strip_prefix("frame_")
+                .and_then(|n| n.strip_suffix(".png"))
+                .and_then(|n| n.parse::<u32>().ok())
+            {
+                have.insert(n);
+            }
+        }
+    }
+    let next = (start..end).find(|n| !have.contains(n)).unwrap_or(end);
+    let resumed = (start..next).filter(|n| have.contains(n)).count() as u32;
+    (next, resumed)
 }
 
 pub(super) fn is_video(path: &Path) -> bool {
@@ -88,6 +125,7 @@ impl Game<'_> {
         width: u32,
         height: u32,
         path: &str,
+        resume: bool,
         reply: Option<&Sender<String>>,
     ) -> Result<Option<Value>> {
         if end <= start {
@@ -136,6 +174,11 @@ impl Game<'_> {
         let saved_size = [renderer.config.width, renderer.config.height];
         let saved_playhead = self.cinematix.playhead.t;
         let saved_playing = self.cinematix.playing;
+        let (next, resumed) = if resume {
+            scan_frames(&dir, start, end)
+        } else {
+            (start, 0)
+        };
 
         let renderer = self.renderer.as_mut().ok_or("no renderer yet")?;
         renderer.resize(width, height);
@@ -152,9 +195,10 @@ impl Game<'_> {
             height,
             dir: dir.clone(),
             video: video.clone(),
-            next: start,
+            next,
             stalls: 0,
             settle: 0,
+            resumed,
             reply: reply.cloned(),
             saved_size,
             saved_playhead,
@@ -173,12 +217,21 @@ impl Game<'_> {
             "ok": true, "started": true,
             "frames": end - start, "fps": fps, "size": [width, height],
             "path": dir.display().to_string(),
+            "next": next, "resumed": resumed,
         })))
     }
 
     /// One frame of a running render, on the frame path: set the playhead, draw, save the
     /// readback, then advance or finish. Returns whether a frame was produced.
     pub(super) fn render_cinematix_frame(&mut self) -> Result<bool> {
+        if self
+            .cinematix_export
+            .as_ref()
+            .is_some_and(|r| r.next >= r.end)
+        {
+            self.finish_cinematix_render();
+            return Ok(true);
+        }
         let (frame, fps, path) = {
             let render = self
                 .cinematix_export
@@ -274,6 +327,10 @@ impl Game<'_> {
             return Ok(true);
         }
         render.next += 1;
+        while render.next < render.end && render.frame_path(render.next).exists() {
+            render.resumed += 1;
+            render.next += 1;
+        }
         render.stalls = 0;
         render.settle = 0;
         if render.next >= render.end {
@@ -296,6 +353,7 @@ impl Game<'_> {
             "size": [render.width, render.height],
             "elapsed_ms": elapsed_ms,
             "stalls": render.stalls,
+            "resumed": render.resumed,
         });
         if let Some(video) = &render.video {
             value["video"] = json!(video.display().to_string());
@@ -347,7 +405,7 @@ impl Game<'_> {
         render: Render,
         outcome: std::result::Result<Value, String>,
     ) {
-        let written = render.next.saturating_sub(render.start);
+        let written = render.next.saturating_sub(render.start + render.resumed);
         let value = match outcome {
             Ok(mut value) => {
                 value["written"] = json!(written);
@@ -398,7 +456,7 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_video, output_dir};
+    use super::{is_video, output_dir, scan_frames};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -411,6 +469,20 @@ mod tests {
             output_dir(Path::new("/tmp/film")),
             PathBuf::from("/tmp/film")
         );
+    }
+
+    #[test]
+    fn a_resumed_job_starts_at_the_first_missing_frame() {
+        let dir = std::env::temp_dir().join(format!("cinematix-resume-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in [0u32, 1, 3] {
+            std::fs::write(dir.join(format!("frame_{n:06}.png")), b"x").unwrap();
+        }
+        std::fs::write(dir.join("frame_000002.txt"), b"x").unwrap();
+        assert_eq!(scan_frames(&dir, 0, 5), (2, 2));
+        assert_eq!(scan_frames(&dir, 0, 2), (2, 2));
+        assert_eq!(scan_frames(&dir, 4, 6), (4, 0));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

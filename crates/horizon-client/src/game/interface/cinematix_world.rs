@@ -51,6 +51,28 @@ fn block_id(
         .map_err(|error| format!("{}: {error}", block.name))
 }
 
+/// Every position in the inclusive box, or `None` when it holds more than `cap` blocks.
+fn box_positions(a: [i32; 3], b: [i32; 3], cap: usize) -> Option<Vec<BlockPos>> {
+    let (x0, x1) = (a[0].min(b[0]), a[0].max(b[0]));
+    let (y0, y1) = (a[1].min(b[1]), a[1].max(b[1]));
+    let (z0, z1) = (a[2].min(b[2]), a[2].max(b[2]));
+    let count = (i64::from(x1) - i64::from(x0) + 1)
+        * (i64::from(y1) - i64::from(y0) + 1)
+        * (i64::from(z1) - i64::from(z0) + 1);
+    if count <= 0 || count > cap as i64 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count as usize);
+    for x in x0..=x1 {
+        for y in y0..=y1 {
+            for z in z0..=z1 {
+                out.push(BlockPos { x, y, z });
+            }
+        }
+    }
+    Some(out)
+}
+
 fn describe(change: &BlockChange) -> String {
     match change {
         BlockChange::Set(block) => block.name.clone(),
@@ -67,10 +89,13 @@ impl Game<'_> {
             return false;
         }
         let t = self.cinematix.playhead.t;
-        if self.cinematix_world_time == Some(t) {
+        if self.cinematix_world_time == Some(t)
+            && self.cinematix_world_revision == Some(self.cinematix.revision)
+        {
             return false;
         }
         self.cinematix_world_time = Some(t);
+        self.cinematix_world_revision = Some(self.cinematix.revision);
 
         let next: HashMap<[i32; 3], u32> = {
             let layer = &self.cinematix.doc.scene.world;
@@ -121,6 +146,7 @@ impl Game<'_> {
     /// own block and its sections remesh.
     pub(super) fn clear_cinematix_world(&mut self) {
         self.cinematix_world_time = None;
+        self.cinematix_world_revision = None;
         let positions: Vec<_> = self.cinematix_world.blocks.keys().copied().collect();
         for pos in positions {
             super::viewed_worlds::meshing::block_changed(&mut self.world, pos);
@@ -135,6 +161,7 @@ impl Game<'_> {
         change: BlockChange,
         at: Option<f64>,
     ) -> Result<Value> {
+        self.cinematix.checkpoint();
         let layer = &mut self.cinematix.doc.scene.world;
         layer.set(pos, change, at);
         self.cinematix_world_time = None;
@@ -200,10 +227,56 @@ impl Game<'_> {
                     self.push_world_op(pos, BlockChange::Restore, at)?,
                 ))
             }
+            "box" => {
+                let coords: Option<Vec<i32>> =
+                    words.get(1..7).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                let Some(c) = coords.filter(|c| c.len() == 6) else {
+                    return Ok(Some(json!({
+                        "ok": false,
+                        "error": "world box needs X1 Y1 Z1 X2 Y2 Z2 BLOCK [AT]",
+                    })));
+                };
+                let Some(name) = words.get(7).copied() else {
+                    return Ok(Some(json!({
+                        "ok": false,
+                        "error": "world box needs a block name after the corners",
+                    })));
+                };
+                let block = FilmBlock {
+                    name: name.to_owned(),
+                    props: BTreeMap::new(),
+                };
+                block_id(&self.pack.assets.registry, &block)
+                    .map_err(|e| format!("unknown block {e}"))?;
+                let Some(positions) = box_positions([c[0], c[1], c[2]], [c[3], c[4], c[5]], 65_536)
+                else {
+                    return Ok(Some(json!({
+                        "ok": false,
+                        "error": "world box is larger than 65536 blocks",
+                    })));
+                };
+                let at = at(8)?;
+                self.cinematix.checkpoint();
+                {
+                    let layer = &mut self.cinematix.doc.scene.world;
+                    for p in &positions {
+                        layer.set(*p, BlockChange::Set(block.clone()), at);
+                    }
+                }
+                self.cinematix_world_time = None;
+                self.sync_cinematix_world();
+                Ok(Some(json!({
+                    "ok": true,
+                    "blocks": positions.len(),
+                    "ops": self.cinematix.doc.scene.world.len(),
+                    "active": self.cinematix_world.len(),
+                })))
+            }
             "clear" => {
                 let count = self.cinematix.doc.scene.world.len();
                 let active = self.cinematix_world.len();
                 if count > 0 {
+                    self.cinematix.checkpoint();
                     self.cinematix.doc.scene.world = Default::default();
                     self.cinematix_world_time = None;
                     self.clear_cinematix_world();
@@ -244,9 +317,18 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, FilmBlock};
+    use super::{box_positions, describe, FilmBlock};
     use cinematix_editor::BlockChange;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_box_is_inclusive_ordered_and_bounded() {
+        let p = box_positions([2, 1, 0], [0, 2, 0], 100).unwrap();
+        assert_eq!(p.len(), 6);
+        assert_eq!((p[0].x, p[0].y, p[0].z), (0, 1, 0));
+        assert_eq!((p[5].x, p[5].y, p[5].z), (2, 2, 0));
+        assert!(box_positions([0, 0, 0], [9, 9, 9], 100).is_none());
+    }
 
     #[test]
     fn a_change_reads_as_the_block_it_draws() {

@@ -35,6 +35,23 @@ impl TimelineTab {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InspectorTab {
+    Properties,
+    Scene,
+}
+
+impl InspectorTab {
+    pub const ALL: [InspectorTab; 2] = [InspectorTab::Properties, InspectorTab::Scene];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InspectorTab::Properties => "cinematix.panel.properties",
+            InspectorTab::Scene => "cinematix.panel.scene",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Save,
     Undo,
@@ -57,7 +74,7 @@ impl Tool {
     /// Whether the tool has a backend that can run now; Undo/Redo depend on the editor's stacks,
     /// so the draw and press paths ask `Editor` instead of this.
     pub fn implemented(self) -> bool {
-        !matches!(self, Tool::Render)
+        true
     }
 }
 
@@ -81,6 +98,11 @@ pub struct Frame {
     pub split_v: Rect,
     pub tabs: Vec<(TimelineTab, Rect)>,
     pub tools: Vec<(Tool, Rect)>,
+    pub inspector_tabs: Vec<(InspectorTab, Rect)>,
+    pub inspector_header: Rect,
+    pub inspector_redock: Option<Rect>,
+    pub inspector_dock: Rect,
+    pub inspector_floating: bool,
     /// Value-axis buttons (X/Y/Z/W) in the curve editor, for the selected channel's kind.
     pub curve_axes: Vec<(usize, Rect)>,
     /// Where the curve is plotted (the lane area, under the ruler).
@@ -92,6 +114,9 @@ pub struct Frame {
     pub rows: Vec<Row>,
     pub tree: Vec<(NodeId, usize, bool, Rect)>,
     pub tree_toggle: Vec<(NodeId, Rect)>,
+    pub clip_add: Rect,
+    pub clips: Vec<(usize, Rect)>,
+    pub clip_delete: Vec<(usize, Rect)>,
     pub visible_rows: usize,
 }
 
@@ -105,6 +130,8 @@ impl Frame {
         inspector_frac: f32,
         selected_channel: Option<usize>,
         expanded: &HashSet<NodeId>,
+        inspector_tab: InspectorTab,
+        inspector_float: Option<Rect>,
     ) -> Self {
         let (w, h) = size;
         let t = Tokens::default();
@@ -120,11 +147,21 @@ impl Frame {
 
         let header = Rect::new(0.0, 0.0, w, header_h);
         let rail = Rect::new(0.0, header_h, rail_w, stage_h - timeline_h);
-        let inspector = Rect::new(w - inspector_w, header_h, inspector_w, stage_h - timeline_h);
+        let inspector_dock =
+            Rect::new(w - inspector_w, header_h, inspector_w, stage_h - timeline_h);
+        let float = inspector_float.map(|r| {
+            let fw = r.w.clamp(190.0, (w - rail_w - 40.0).max(190.0));
+            let fh = r.h.clamp(150.0, (h - header_h - 36.0).max(150.0));
+            let fx = r.x.clamp(rail_w, (w - fw).max(rail_w));
+            let fy = r.y.clamp(header_h, (h - fh).max(header_h));
+            Rect::new(fx, fy, fw, fh)
+        });
+        let inspector_floating = float.is_some();
+        let inspector = float.unwrap_or(inspector_dock);
         let viewport = Rect::new(
             rail_w,
             header_h,
-            (w - rail_w - inspector_w).max(0.0),
+            (w - rail_w - if inspector_floating { 0.0 } else { inspector_w }).max(0.0),
             stage_h - timeline_h,
         );
         let timeline = Rect::new(rail_w, h - timeline_h, (w - rail_w).max(0.0), timeline_h);
@@ -150,12 +187,16 @@ impl Frame {
         let axis = TimeAxis::new(0.0, 1.0, ruler.x, ruler.x + ruler.w);
 
         let split_h = Rect::new(rail_w, timeline.y - 2.0, (w - rail_w).max(0.0), 4.0);
-        let split_v = Rect::new(
-            inspector.x - 2.0,
-            header_h,
-            4.0,
-            (stage_h - timeline_h).max(0.0),
-        );
+        let split_v = if inspector_floating {
+            Rect::new(0.0, 0.0, 0.0, 0.0)
+        } else {
+            Rect::new(
+                inspector.x - 2.0,
+                header_h,
+                4.0,
+                (stage_h - timeline_h).max(0.0),
+            )
+        };
 
         let mut tabs = Vec::with_capacity(TimelineTab::ALL.len());
         let mut tab_x = timeline.x + 4.0;
@@ -172,6 +213,30 @@ impl Frame {
             tabs.push((tab, rect));
             tab_x += rect.w + 2.0;
         }
+
+        let inspector_header = Rect::new(inspector.x, inspector.y, inspector.w, 20.0);
+        let mut inspector_tabs = Vec::new();
+        let tab_right = inspector.x + inspector.w - if inspector_floating { 24.0 } else { 4.0 };
+        let mut tab_x = inspector.x + 4.0;
+        for tab in InspectorTab::ALL {
+            let width = match tab {
+                InspectorTab::Properties => 74.0,
+                InspectorTab::Scene => 52.0,
+            };
+            if tab_x + width > tab_right {
+                break;
+            }
+            inspector_tabs.push((tab, Rect::new(tab_x, inspector.y + 2.0, width, 16.0)));
+            tab_x += width + 2.0;
+        }
+        let inspector_redock = inspector_floating.then(|| {
+            Rect::new(
+                inspector.x + inspector.w - 20.0,
+                inspector.y + 2.0,
+                16.0,
+                16.0,
+            )
+        });
 
         let mut curve_axes = Vec::new();
         if let Some(ci) = selected_channel
@@ -229,19 +294,35 @@ impl Frame {
         }
 
         let mut fields = Vec::new();
-        let mut fy = inspector.y + 30.0;
-        for f in fields_for(section) {
-            let rect = Rect::new(
-                inspector.x + t.pad,
-                fy,
-                (inspector.w - t.pad * 2.0).max(20.0),
-                20.0,
-            );
-            if rect.y + rect.h > inspector.y + inspector.h - t.pad {
+        let mut fy = inspector.y + 42.0;
+        if inspector_tab == InspectorTab::Properties {
+            for f in fields_for(section) {
+                let rect = Rect::new(
+                    inspector.x + t.pad,
+                    fy,
+                    (inspector.w - t.pad * 2.0).max(20.0),
+                    20.0,
+                );
+                if rect.y + rect.h > inspector.y + inspector.h - t.pad {
+                    break;
+                }
+                fields.push((*f, rect));
+                fy += 24.0;
+            }
+        }
+
+        let clip_add = Rect::new(lanes.x + 4.0, lanes.y + 2.0, 76.0, 16.0);
+        let mut clips = Vec::new();
+        let mut clip_delete = Vec::new();
+        let mut cy = lanes.y + ROW_H + 2.0;
+        for (i, _) in doc.scene.meta.clips.iter().enumerate() {
+            if cy + ROW_H > transport.y {
                 break;
             }
-            fields.push((*f, rect));
-            fy += 24.0;
+            let row = Rect::new(lanes.x + 4.0, cy, (lanes.w - 8.0).max(20.0), ROW_H);
+            clips.push((i, row));
+            clip_delete.push((i, Rect::new(row.x + row.w - 18.0, cy + 2.0, 16.0, 16.0)));
+            cy += ROW_H;
         }
 
         let mut rows = Vec::new();
@@ -264,10 +345,7 @@ impl Frame {
 
         let mut tree = Vec::new();
         let mut tree_toggle = Vec::new();
-        let mut ly = fields
-            .last()
-            .map(|(_, r)| r.y + r.h + 8.0)
-            .unwrap_or(inspector.y + 30.0);
+        let mut ly = inspector.y + 26.0;
         let bottom = inspector.y + inspector.h - t.pad;
         fn walk(
             doc: &Document,
@@ -311,19 +389,21 @@ impl Frame {
                 }
             }
         }
-        for root in doc.scene.roots.clone() {
-            walk(
-                doc,
-                root,
-                0,
-                expanded,
-                &mut ly,
-                bottom,
-                inspector.x + t.pad,
-                inspector.w - t.pad * 2.0,
-                &mut tree,
-                &mut tree_toggle,
-            );
+        if inspector_tab == InspectorTab::Scene {
+            for root in doc.scene.roots.clone() {
+                walk(
+                    doc,
+                    root,
+                    0,
+                    expanded,
+                    &mut ly,
+                    bottom,
+                    inspector.x + t.pad,
+                    inspector.w - t.pad * 2.0,
+                    &mut tree,
+                    &mut tree_toggle,
+                );
+            }
         }
 
         Self {
@@ -340,6 +420,11 @@ impl Frame {
             split_v,
             tabs,
             tools,
+            inspector_tabs,
+            inspector_header,
+            inspector_redock,
+            inspector_dock,
+            inspector_floating,
             curve_axes,
             curve_plot,
             axis,
@@ -349,6 +434,9 @@ impl Frame {
             rows,
             tree,
             tree_toggle,
+            clip_add,
+            clips,
+            clip_delete,
             visible_rows,
         }
     }
@@ -380,6 +468,8 @@ mod tests {
             0.22,
             None,
             &std::collections::HashSet::new(),
+            InspectorTab::Properties,
+            None,
         );
         assert_eq!(f.header.w, 1280.0);
         assert!(f.rail.x + f.rail.w <= f.viewport.x + 0.01);
@@ -402,6 +492,8 @@ mod tests {
                 0.22,
                 None,
                 &std::collections::HashSet::new(),
+                InspectorTab::Properties,
+                None,
             );
             for r in [
                 f.header,
@@ -430,6 +522,8 @@ mod tests {
             0.22,
             None,
             &std::collections::HashSet::new(),
+            InspectorTab::Properties,
+            None,
         );
         assert_eq!(f.rail_items.len(), Section::ALL.len());
         for (s, r) in &f.rail_items {
@@ -450,6 +544,8 @@ mod tests {
             0.22,
             None,
             &std::collections::HashSet::new(),
+            InspectorTab::Properties,
+            None,
         );
         assert_eq!(f.rows.first().map(|r| r.chan), Some(2));
         assert!(f.rows.len() <= f.visible_rows);
@@ -470,6 +566,8 @@ mod tests {
             0.22,
             None,
             &std::collections::HashSet::new(),
+            InspectorTab::Properties,
+            None,
         )
         .with_window(0.0, 10.0);
         assert!((f.axis.x(0.0) - f.ruler.x).abs() < 0.01);

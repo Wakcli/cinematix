@@ -206,12 +206,18 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
     let load = literal(&mut d, root, "load");
     argument(&mut d, load, "path", ArgType::Greedy);
     literal(&mut d, root, "new");
+    literal(&mut d, root, "undo");
+    literal(&mut d, root, "redo");
     let camera = literal(&mut d, root, "camera");
     literal(&mut d, camera, "player");
     let pose = literal(&mut d, camera, "pose");
     argument(&mut d, pose, "values", ArgType::Greedy);
     let world = literal(&mut d, root, "world");
     argument(&mut d, world, "args", ArgType::Greedy);
+    let env = literal(&mut d, root, "env");
+    argument(&mut d, env, "args", ArgType::Greedy);
+    let meta = literal(&mut d, root, "meta");
+    argument(&mut d, meta, "args", ArgType::Greedy);
     let channel = literal(&mut d, root, "channel");
     argument(
         &mut d,
@@ -227,7 +233,10 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
         &mut d,
         interp,
         "mode",
-        ArgType::StrEnum(&["step", "linear", "smooth", "spline"], "argument.enum.invalid"),
+        ArgType::StrEnum(
+            &["step", "linear", "smooth", "spline", "bezier"],
+            "argument.enum.invalid",
+        ),
     );
     let section = literal(&mut d, root, "section");
     argument(

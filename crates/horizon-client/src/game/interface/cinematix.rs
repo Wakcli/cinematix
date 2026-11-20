@@ -206,7 +206,7 @@ impl Game<'_> {
                 let mods = self.cinematix_mods();
                 self.cinematix.press(self.cursor, mods);
             } else {
-                self.cinematix.release();
+                self.cinematix.release(self.cursor);
             }
         }
         true
@@ -249,24 +249,60 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix || self.cinematix_export.is_some() {
             return;
         }
-        if let Some(cinematix_editor::Request::Save) = self.cinematix.take_request() {
-            let path = film_path();
-            let stamp = cinematix_editor::Stamp {
-                app_version: env!("CARGO_PKG_VERSION"),
-                saved_unix: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or_default(),
-            };
-            match cinematix_editor::save(&path, &self.cinematix.doc, stamp) {
-                Ok(()) => self.system_message(Text::tr(
-                    "horizon.cinematix.saved",
-                    &[&path.display().to_string()],
-                )),
-                Err(error) => {
-                    self.system_message(Text::tr("horizon.cinematix.render_error", &[&error]))
+        match self.cinematix.take_request() {
+            Some(cinematix_editor::Request::Save) => {
+                let path = film_path();
+                let stamp = cinematix_editor::Stamp {
+                    app_version: env!("CARGO_PKG_VERSION"),
+                    saved_unix: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or_default(),
+                };
+                match cinematix_editor::save(&path, &self.cinematix.doc, stamp) {
+                    Ok(()) => self.system_message(Text::tr(
+                        "horizon.cinematix.saved",
+                        &[&path.display().to_string()],
+                    )),
+                    Err(error) => {
+                        self.system_message(Text::tr("horizon.cinematix.render_error", &[&error]))
+                    }
                 }
             }
+            Some(cinematix_editor::Request::Render) => {
+                let fps = self.cinematix.fps().round().max(1.0) as u32;
+                let (r0, r1) = self.cinematix.range();
+                let start = (r0.max(0.0) * f64::from(fps)).round() as u32;
+                let end = ((r1.max(r0 + 0.001) * f64::from(fps)).round() as u32).max(start + 1);
+                let (mut width, mut height) = self.cinematix.doc.scene.meta.resolution;
+                width = (width.max(16) / 2 * 2).min(8192);
+                height = (height.max(16) / 2 * 2).min(8192);
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                let path = film_path()
+                    .with_file_name(format!("render-{stamp}.mp4"));
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match self.start_cinematix_render(
+                    start,
+                    end,
+                    fps,
+                    width,
+                    height,
+                    &path.display().to_string(),
+                    false,
+                    None,
+                ) {
+                    Ok(_) => {}
+                    Err(error) => {
+                        self.system_message(Text::tr("horizon.cinematix.render_error", &[&error]))
+                    }
+                }
+            }
+            None => {}
         }
         let dt = elapsed.as_secs_f32().min(0.1);
         self.cinematix.advance(f64::from(dt));
@@ -328,8 +364,17 @@ impl Game<'_> {
                 "interp" => "horizon.cinematix.interp",
                 "channel" => "horizon.cinematix.channel",
                 "world" => "horizon.cinematix.world_changed",
+                "env" => "horizon.cinematix.environment",
                 "render" => "horizon.cinematix.render_started",
                 "camera" if words.get(1) == Some(&"pose") => "horizon.cinematix.pose",
+                "camera"
+                    if matches!(
+                        words.get(1),
+                        Some(&"orbit" | &"dolly" | &"rail" | &"shake")
+                    ) =>
+                {
+                    "horizon.cinematix.camera"
+                }
                 _ => "horizon.cinematix.status",
             };
             if words[0] == "render" {
@@ -344,6 +389,7 @@ impl Game<'_> {
             }
             let detail = match (words[0], key) {
                 ("save" | "load", _) => reply["path"].as_str().unwrap_or_default().to_owned(),
+                ("env", _) => reply["detail"].as_str().unwrap_or_default().to_owned(),
                 _ => reply["frame"].as_i64().unwrap_or_default().to_string(),
             };
             self.system_message(Text::tr(key, &[&detail]));
@@ -398,6 +444,7 @@ impl Game<'_> {
                     "keys": ed.doc.key_count(),
                     "nodes": ed.doc.scene.nodes.len(),
                     "range": [r0, r1],
+                    "render": self.cinematix_export.as_ref().map(|r| r.progress()),
                     "resolution": [w, h],
                     "camera": ed.camera_status().map(|(position, yaw, pitch, fov)| json!({
                         "position": position, "yaw": yaw, "pitch": pitch, "fov": fov,
@@ -512,7 +559,10 @@ impl Game<'_> {
                         "error": "render needs START END FPS WIDTH HEIGHT PATH",
                     })));
                 };
-                return self.start_cinematix_render(v[0], v[1], v[2], v[3], v[4], path, reply);
+                let resume = words.get(7) == Some(&"--resume");
+                return self.start_cinematix_render(
+                    v[0], v[1], v[2], v[3], v[4], path, resume, reply,
+                );
             }
             "new" => {
                 self.cinematix.adopt_document(cinematix_editor::Document::new());
@@ -558,8 +608,224 @@ impl Game<'_> {
                         })),
                     })))
                 }
-                _ => Ok(Some(json!({ "ok": false, "error": "camera needs player or pose" }))),
+                Some("orbit") => {
+                    let values: Option<Vec<f32>> =
+                        words[2..].iter().map(|w| w.parse::<f32>().ok()).collect();
+                    let Some(v) = values.filter(|v| v.len() == 5 || v.len() == 6) else {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "camera orbit needs CX CY CZ RADIUS FRAMES [HEIGHT]",
+                        })));
+                    };
+                    let center = Vec3::new(v[0], v[1], v[2]);
+                    let frames = v[4].round().max(1.0) as u32;
+                    let ok = self.cinematix.orbit(center, v[3], frames, v.get(5).copied());
+                    Ok(Some(json!({
+                        "ok": ok, "frame": self.cinematix.frame_number(),
+                        "keys": self.cinematix.doc.key_count(),
+                    })))
+                }
+                Some("dolly") => {
+                    let values: Option<Vec<f32>> =
+                        words[2..].iter().map(|w| w.parse::<f32>().ok()).collect();
+                    let Some(v) = values.filter(|v| v.len() == 3 || v.len() == 4) else {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "camera dolly needs DX DY DZ [FRAMES]",
+                        })));
+                    };
+                    let delta = Vec3::new(v[0], v[1], v[2]);
+                    let frames = v.get(3).map_or(24, |f| f.round().max(1.0) as u32);
+                    let ok = self.cinematix.dolly(delta, frames);
+                    Ok(Some(json!({
+                        "ok": ok, "frame": self.cinematix.frame_number(),
+                        "keys": self.cinematix.doc.key_count(),
+                    })))
+                }
+                Some("rail") => {
+                    let frames = words.get(2).and_then(|w| w.parse::<u32>().ok());
+                    let values: Option<Vec<f32>> =
+                        words[3..].iter().map(|w| w.parse::<f32>().ok()).collect();
+                    let Some((frames, v)) = frames.zip(values) else {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "camera rail needs FRAMES then X Y Z for every point",
+                        })));
+                    };
+                    if v.len() < 6 || v.len() % 3 != 0 {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "camera rail needs at least two X Y Z points",
+                        })));
+                    }
+                    let points: Vec<Vec3> = v
+                        .chunks_exact(3)
+                        .map(|p| Vec3::new(p[0], p[1], p[2]))
+                        .collect();
+                    let ok = self.cinematix.rail(&points, frames);
+                    Ok(Some(json!({
+                        "ok": ok, "frame": self.cinematix.frame_number(),
+                        "keys": self.cinematix.doc.key_count(),
+                    })))
+                }
+                Some("shake") => {
+                    let values: Option<Vec<f32>> =
+                        words[2..].iter().map(|w| w.parse::<f32>().ok()).collect();
+                    let Some(v) = values.filter(|v| v.len() == 2) else {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "camera shake needs AMPLITUDE_DEGREES FREQUENCY_HZ",
+                        })));
+                    };
+                    let fx = &mut self.cinematix.doc.scene.meta.camera_fx;
+                    fx.shake_amplitude = v[0].clamp(0.0, 10.0);
+                    fx.shake_frequency = v[1].clamp(0.0, 10.0);
+                    self.cinematix.revision = self.cinematix.revision.wrapping_add(1);
+                    Ok(Some(json!({
+                        "ok": true,
+                        "shake": [fx.shake_amplitude, fx.shake_frequency],
+                    })))
+                }
+                _ => Ok(Some(json!({
+                    "ok": false,
+                    "error": "camera needs player, pose, orbit, dolly, rail or shake",
+                }))),
             },
+            "meta" => {
+                let meta = &mut self.cinematix.doc.scene.meta;
+                match words.get(1).copied() {
+                    None | Some("status") => {}
+                    Some("range") => {
+                        let values: Option<Vec<f64>> =
+                            words.get(2..4).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                        let Some(v) = values.filter(|v| v.len() == 2 && v[1] > v[0]) else {
+                            return Ok(Some(json!({
+                                "ok": false,
+                                "error": "meta range needs START END with END after START",
+                            })));
+                        };
+                        meta.range = (v[0], v[1]);
+                    }
+                    Some("fps") => {
+                        let Some(v) = words.get(2).and_then(|w| w.parse::<f32>().ok()) else {
+                            return Ok(Some(json!({
+                                "ok": false, "error": "meta fps needs a number",
+                            })));
+                        };
+                        meta.fps = v.clamp(1.0, 240.0);
+                    }
+                    Some("size") => {
+                        let values: Option<Vec<u32>> =
+                            words.get(2..4).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                        let Some(v) = values.filter(|v| v.len() == 2) else {
+                            return Ok(Some(json!({
+                                "ok": false, "error": "meta size needs WIDTH HEIGHT",
+                            })));
+                        };
+                        if !(16..=8192).contains(&v[0])
+                            || !(16..=8192).contains(&v[1])
+                            || v[0] % 2 != 0
+                            || v[1] % 2 != 0
+                        {
+                            return Ok(Some(json!({
+                                "ok": false,
+                                "error": "meta size must be even, 16 to 8192",
+                            })));
+                        }
+                        meta.resolution = (v[0], v[1]);
+                    }
+                    Some(other) => {
+                        return Ok(Some(json!({
+                            "ok": false, "error": format!("unknown meta field {other}"),
+                        })));
+                    }
+                }
+                Ok(Some(json!({
+                    "ok": true, "range": meta.range, "fps": meta.fps,
+                    "size": meta.resolution, "name": meta.name, "author": meta.author,
+                })))
+            }
+            "undo" => {
+                let ok = self.cinematix.undo();
+                self.cinematix_world_time = None;
+                Ok(Some(json!({
+                    "ok": ok, "keys": self.cinematix.doc.key_count(),
+                    "can_undo": self.cinematix.can_undo(),
+                    "can_redo": self.cinematix.can_redo(),
+                })))
+            }
+            "redo" => {
+                let ok = self.cinematix.redo();
+                self.cinematix_world_time = None;
+                Ok(Some(json!({
+                    "ok": ok, "keys": self.cinematix.doc.key_count(),
+                    "can_undo": self.cinematix.can_undo(),
+                    "can_redo": self.cinematix.can_redo(),
+                })))
+            }
+            "env" => {
+                let env = &mut self.cinematix.doc.scene.meta.environment;
+                let num = |i: usize, lo: f32, hi: f32| -> Result<f32> {
+                    words
+                        .get(i)
+                        .ok_or_else(|| "env needs a value".into())
+                        .and_then(|w| w.parse::<f32>().map_err(|_| format!("{w}: not a number").into()))
+                        .map(|v| v.clamp(lo, hi))
+                };
+                let detail = match words.get(1).copied() {
+                    None | Some("status") => {
+                        return Ok(Some(json!({
+                            "ok": true, "time": env.time, "rain": env.rain,
+                            "thunder": env.thunder, "fog_start": env.fog_start,
+                            "fog_end": env.fog_end, "sky_color": env.sky_color,
+                            "fog_color": env.fog_color,
+                        })));
+                    }
+                    Some("clear") => {
+                        *env = Default::default();
+                        "cleared".to_owned()
+                    }
+                    Some("time") => {
+                        let v = num(2, 0.0, 24_000.0)?;
+                        env.time = Some(v);
+                        format!("time {v:.0}")
+                    }
+                    Some("rain") => {
+                        let v = num(2, 0.0, 1.0)?;
+                        env.rain = Some(v);
+                        format!("rain {v:.2}")
+                    }
+                    Some("thunder") => {
+                        let v = num(2, 0.0, 1.0)?;
+                        env.thunder = Some(v);
+                        format!("thunder {v:.2}")
+                    }
+                    Some("fog") => {
+                        let start = num(2, 0.0, 2048.0)?;
+                        let end = num(3, 0.0, 2048.0)?;
+                        env.fog_start = Some(start);
+                        env.fog_end = Some(end);
+                        format!("fog {start:.0}..{end:.0}")
+                    }
+                    Some("sky") => {
+                        let c = [num(2, 0.0, 1.0)?, num(3, 0.0, 1.0)?, num(4, 0.0, 1.0)?];
+                        env.sky_color = Some(c);
+                        format!("sky {:.2} {:.2} {:.2}", c[0], c[1], c[2])
+                    }
+                    Some("fogcolor") => {
+                        let c = [num(2, 0.0, 1.0)?, num(3, 0.0, 1.0)?, num(4, 0.0, 1.0)?];
+                        env.fog_color = Some(c);
+                        format!("fogcolor {:.2} {:.2} {:.2}", c[0], c[1], c[2])
+                    }
+                    Some(other) => {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": format!("unknown env field {other}"),
+                        })));
+                    }
+                };
+                Ok(Some(json!({ "ok": true, "detail": detail })))
+            }
             "world" => return self.cinematix_world_control(&words[1..]),
             "channel" => {
                 let prop = match words.get(1).copied() {
@@ -594,6 +860,10 @@ impl Game<'_> {
                     Some("linear") => Interp::Linear,
                     Some("smooth") => Interp::Smooth,
                     Some("spline") => Interp::Spline,
+                    Some("bezier") => Interp::Bezier {
+                        out: [0.42, 0.0],
+                        in_: [0.58, 1.0],
+                    },
                     _ => {
                         return Ok(Some(json!({
                             "ok": false,

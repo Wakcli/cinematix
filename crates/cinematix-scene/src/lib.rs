@@ -113,6 +113,58 @@ pub struct AssetRef {
     pub packed: bool,
 }
 
+/// The film's environment: each field `None` keeps the world's own value, so a film that sets
+/// nothing renders the singleplayer world exactly as it is.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EnvironmentData {
+    #[serde(default)]
+    pub time: Option<f32>,
+    #[serde(default)]
+    pub rain: Option<f32>,
+    #[serde(default)]
+    pub thunder: Option<f32>,
+    #[serde(default)]
+    pub fog_start: Option<f32>,
+    #[serde(default)]
+    pub fog_end: Option<f32>,
+    #[serde(default)]
+    pub sky_color: Option<[f32; 3]>,
+    #[serde(default)]
+    pub fog_color: Option<[f32; 3]>,
+}
+
+impl EnvironmentData {
+    pub fn any(&self) -> bool {
+        self.time.is_some()
+            || self.rain.is_some()
+            || self.thunder.is_some()
+            || self.fog_start.is_some()
+            || self.fog_end.is_some()
+            || self.sky_color.is_some()
+            || self.fog_color.is_some()
+    }
+}
+
+/// A named span of the film, the Clips tab's shot list. Clips share the one timeline; they are a
+/// way to jump between shots, not separate channel sets.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Clip {
+    #[serde(default)]
+    pub name: String,
+    pub start: f64,
+    pub end: f64,
+}
+
+/// A deterministic camera shake: two sine terms at `frequency` and 1.7 times it, in degrees.
+/// Time-based, so a preview and every rendered frame agree.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CameraFx {
+    #[serde(default)]
+    pub shake_amplitude: f32,
+    #[serde(default)]
+    pub shake_frequency: f32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SceneMeta {
     pub name: String,
@@ -120,6 +172,12 @@ pub struct SceneMeta {
     pub fps: f32,
     pub range: (f64, f64),
     pub resolution: (u32, u32),
+    #[serde(default)]
+    pub environment: EnvironmentData,
+    #[serde(default)]
+    pub clips: Vec<Clip>,
+    #[serde(default)]
+    pub camera_fx: CameraFx,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

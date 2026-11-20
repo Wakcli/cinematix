@@ -187,19 +187,45 @@ impl Game<'_> {
     fn own_view(&self) -> bool {
         self.remote.is_some() && self.dim == Dim::Overworld
     }
-    /// The day time the frame draws (sky, sun, moon, the sky's light): PvP & HUD's time of day,
-    /// else the world's. The world's own `day_time` and everything that plays by it stay.
+    /// The film's environment while the editor is open or a render is running. `None` when no
+    /// override is set or Cinematix is closed, so the world's own values are drawn unchanged.
+    pub(in crate::game) fn cinematix_environment(
+        &self,
+    ) -> Option<&cinematix_editor::EnvironmentData> {
+        if self.screen != crate::game::Screen::Cinematix && self.cinematix_export.is_none() {
+            return None;
+        }
+        let env = &self.cinematix.doc.scene.meta.environment;
+        env.any().then_some(env)
+    }
+
+    /// The day time the frame draws (sky, sun, moon, the sky's light): Cinematix's film time,
+    /// PvP & HUD's time of day, else the world's. The world's own `day_time` and everything that
+    /// plays by it stay.
     pub(in crate::game) fn view_day_time(&self) -> i64 {
+        if let Some(time) = self.cinematix_environment().and_then(|e| e.time) {
+            return self.world.day_time.div_euclid(24_000) * 24_000
+                + i64::from(time.round().clamp(0.0, 24_000.0) as i32);
+        }
         let fixed = self.settings.extras.pvp.tweaks.time;
         horizon_client::pvp::view_day_time(self.world.day_time, fixed.filter(|_| self.own_view()))
     }
     /// The rain and thunder levels the frame draws (rain, the sky's colour and light, fog): PvP &
     /// HUD's weather, else the world's. Gameplay (riptide, mobs, crops) keeps the world's.
     pub(in crate::game) fn view_weather(&self, partial: f32) -> (f32, f32) {
-        match self.settings.extras.pvp.tweaks.weather {
+        let (mut rain, mut thunder) = match self.settings.extras.pvp.tweaks.weather {
             Some(w) if self.own_view() && self.can_have_weather() => w.levels(),
             _ => self.weather_levels(partial),
+        };
+        if let Some(env) = self.cinematix_environment().filter(|_| self.can_have_weather()) {
+            if let Some(v) = env.rain {
+                rain = v.clamp(0.0, 1.0);
+            }
+            if let Some(v) = env.thunder {
+                thunder = v.clamp(0.0, 1.0);
+            }
         }
+        (rain, thunder)
     }
     // What the engine reads from PvP & HUD. Every engine use goes through these, so each becomes
     // one engine knob or hook (vanilla's value when nothing is registered) when PvP & HUD leaves

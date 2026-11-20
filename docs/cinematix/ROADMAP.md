@@ -13,10 +13,10 @@ pass, `partial` means some of it exists, `todo` means no code.
 | Headless operation | done | `xvfb-run` + `--offscreen`, 305 ms |
 | Rendering audit | done | [AUDIT.md](AUDIT.md) §UI, §Camera, §studio |
 | UI audit | done | no `horizon-ui`; kit is `hud.rs` + `ui.rs` + `hud_kit/` |
-| BBS-FS inspection | done at behaviour level | [UI.md](UI.md); McLib licence prevents code reuse |
+| BBS-FS inspection | done | [UI.md](UI.md); both projects are MIT, so the icon sheet and behaviour are reproduced with [ATTRIBUTION](ATTRIBUTION.md) |
 | Integration points identified | done | [ARCHITECTURE.md](ARCHITECTURE.md) §3 |
 | Documentation and agent instructions | done | `AGENTS.md`, `docs/cinematix/` |
-| Deterministic repeat runs proven | **not proven** | one successful sequence; byte-identical repeat is the next check |
+| Deterministic repeat runs proven | done | two static renders produced identical SHA-256 per frame (Phase 8) |
 
 ## Phase 2 — in-game editor shell
 
@@ -28,10 +28,10 @@ restoring everything.
 | `cinematix-editor` crate, `Screen` variant, key binding | done — 25 tests; `Screen::Cinematix`, F8, `/cinematix` |
 | Editor lifecycle: open, close, cursor, input restoration | done — `game/interface/cinematix.rs`; verified headless |
 | Icon rail | done — eight sections with BBS mod's icon sheet (MIT, [ATTRIBUTION](ATTRIBUTION.md)); flat hover/active, tooltips, registered |
-| Dock tree and panel widget | partial — inspector/viewport/timeline split with draggable resizers, BBS panel headers; panels cannot be dragged out yet |
+| Dock tree and panel widget | done — inspector/viewport/timeline split with draggable resizers and BBS panel headers; the inspector tears out into a floating panel by its header, moves, is swallowed over the timeline, and docks again by its button or at the right edge. The inspector has Properties and Scene tabs |
 | Overlay card, context menu | partial — right-click menus on rows/keys/lanes with add/delete/interpolation/fit; mute, rename and paste are drawn dimmed and inert; no overlay card yet |
-| Top toolbar (save/undo/redo/render) | partial — Save writes the default `.cmx`; undo/redo/render are drawn dimmed and inert |
-| Bottom dock tabs (Dope Sheet / Curve Editor / Clips) | partial — Dope Sheet works; Curve Editor and Clips are drawn dimmed and inert |
+| Top toolbar (save/undo/redo/render) | done — Save writes the default `.cmx`, Undo/Redo drive the history, Render starts an MP4 of the film range at the document's resolution and fps (needs `--offscreen` and a still world, and says why otherwise) |
+| Bottom dock tabs (Dope Sheet / Curve Editor / Clips) | done — Dope Sheet, Curve Editor and Clips; Clips is a shot list over the one timeline, Add clip takes the visible range, clicking a clip seeks and zooms to it, x deletes, both undo |
 | Numeric scrubber | done — drawn with a track; drag with Shift ×10 and Ctrl ÷10 |
 | Viewport: live world + editor camera | done — the film camera renders while the screen is open; WASD/E/Q fly, right-drag look, FOV live |
 | Timeline: ruler, playhead, key rows, transport | done — drawn, scrubbable, keys move in time |
@@ -78,7 +78,7 @@ path wrote to `<player dir>/cinematix/film.cmx`.
 | Time axis, zoom, pan, snapping, hit testing | done — `cinematix-timeline`, 9 tests |
 | Dope sheet editing | done — rows, keys, selection, drag in time, add/delete, per-key interpolation |
 | Editing commands and undo | done — add/delete/move/interp, 64-step undo/redo (toolbar, Ctrl+Z/Y); live camera looks are not snapshotted |
-| Curve editor with Bezier handles | partial — curve view per channel with X/Y/Z/W axes and vertical key editing; Bezier handles are drawn but not draggable |
+| Curve editor with Bezier handles | done — curve view per channel with X/Y/Z/W axes, vertical key editing, and both Bezier control points draggable in time and value; Bezier is offered in the interpolation menu |
 | Tree view (scene hierarchy) | done — disclosure, indentation, kind icons, selection |
 
 `Step`/`Linear`/`Smooth`/`Spline`/`Bezier` and quaternion slerp are implemented and tested.
@@ -93,8 +93,8 @@ absent; `Smooth` and `Bezier` cover the practical cases.
 |---|---|
 | Scene graph, node kinds, rest transforms | done — `cinematix-scene` |
 | Camera data (fov, focus, aperture) | done as data |
-| Camera rigs: free, orbit, dolly, rail, spline | partial — the film camera preview and free fly are done; spline exists in `studio/`; orbit, dolly and rail are todo |
-| Constraints, shake, blending | todo |
+| Camera rigs: free, orbit, dolly, rail, spline | partial — preview and free fly; `camera orbit` (centre, radius, frames, height), `camera dolly` (delta, frames) and `camera rail` (frames, points) generate Spline keys and look-at rotations, from chat and ctl; constraints and blending are todo |
+| Constraints, shake, blending | partial — deterministic time-based camera shake (`Shake`, `Shake rate`) applied in the preview and therefore every rendered frame; constraints and blending are todo |
 | Gizmos, selection, path rendering | partial — `studio/path_render.rs` |
 | Spline paths, Catmull-Rom, arc length | partial — `studio/spline.rs`; arc-length parameterisation todo |
 
@@ -118,7 +118,7 @@ added deliberately, with FBX behind a feature, and the choice recorded here when
 | Light data model | done — `cinematix-scene` |
 | Custom mesh pass | todo |
 | Light buffer and a Cinematix shader pack | todo |
-| Environment overrides (time, weather, fog, sky) | todo |
+| Environment overrides (time, weather, fog, sky) | done — the World section and `cinematix env` set time, rain, thunder, fog distances, sky and fog colours as film data; `view_day_time`/`view_weather` and the sampled sky read them while the editor is open or rendering, so the world, its save and PvP's own view stay untouched |
 | Shadow and ray-traced integration | research, not promised; unverifiable on GTX 1080 |
 
 ## Phase 7 — world manipulation
@@ -128,7 +128,7 @@ added deliberately, with FBX behind a feature, and the choice recorded here when
 | Override layer with time-activated ops | done — `WorldDeltaLayer`, indexed, 3 tests |
 | Insertion into chunk read path | done — `Overrides` snapshot written into the mesher's padded block volume |
 | Dirty-set driven remesh | done — the playhead diff marks each changed position's 3x3x3 sections |
-| Animated structures | partial — time-activated single blocks work; multi-block structures and light propagation not yet |
+| Animated structures | partial — time-activated single blocks and `world box` regions work; light propagation is not yet recomputed for overridden blocks |
 
 Verified headless (fresh world, seed 41, camera at 0.5 120 0.5 looking +Z, gold at 0 120 5 active
 from 1.0 s): frame 0 and frame 23 (t = 0.958 s) are byte-identical (SHA-256 `a2b7c5…`), frame 24
@@ -147,7 +147,7 @@ frame, not the file bytes, is what shows the saved blocks are unchanged.
 | `cinematix render START END FPS WIDTH HEIGHT PATH` in chat and ctl | done |
 | Arbitrary-resolution offscreen target | done — `Renderer::resize` retargets the offscreen frame; 320x180, 1920x1080 and 3840x2160 verified |
 | Readback ring and encoder streaming | partial — one synchronous readback per frame; FFmpeg encodes the finished PNG sequence |
-| Resume and cancellation | partial — `cinematix render cancel`; no resume |
+| Resume and cancellation | done — `cinematix render cancel` aborts with the frames kept; a job started with `--resume` skips frames already on disk, reports `resumed`, and `cinematix status` carries the job's start/end/next and output path |
 | Byte-identical repeatability | proven — two runs of a static film produced identical SHA-256 per frame |
 
 Verified headless (HORIZON_STILL=1, `--offscreen`, chunk fade 0): `cinematix render 0 6 24 320 180`
@@ -162,7 +162,7 @@ and a world with 984 dirty sections is refused with that count instead of writin
 | Item | Status |
 |---|---|
 | Scene, channels and world ops are serialisable | done — serde derives |
-| `.cmx` container, asset dedupe, migration | todo |
+| `.cmx` container, asset dedupe, migration | partial — zip with `project.toml` + `scene.json`, format 1 upcast and newer-version refusal; asset blobs deduped by sha256 are still todo because import does not exist yet |
 
 ## Blockers and risks
 
