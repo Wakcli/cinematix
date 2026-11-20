@@ -1362,7 +1362,7 @@
   "cinematix.field.far": "Far plane",
   "cinematix.field.focus": "Focus distance",
   "cinematix.field.aperture": "Aperture",
-  "cinematix.field.fps": "Frame rate",
+  "cinematix.field.fps": "FPS",
   "cinematix.header.frame": "Frame %s",
   "cinematix.header.time": "Time %s s",
   "cinematix.header.fps": "%s fps",
@@ -1449,5 +1449,16 @@
   "cinematix.clip.empty": "No clips: Add clip creates a shot from the visible time range",
   "horizon.cinematix.camera": "Cinematix camera at frame %s",
   "cinematix.field.shake": "Shake",
-  "cinematix.field.shake_frequency": "Shake rate"
+  "cinematix.field.shake_frequency": "Shake rate",
+  "cinematix.vector.position": "Position",
+  "cinematix.vector.rotation": "Rotation",
+  "cinematix.axis.position_x": "Position X",
+  "cinematix.axis.position_y": "Position Y",
+  "cinematix.axis.position_z": "Position Z",
+  "cinematix.axis.yaw": "Yaw",
+  "cinematix.axis.pitch": "Pitch",
+  "cinematix.color.sky": "Sky",
+  "cinematix.color.fog": "Fog",
+  "cinematix.render.link": "Link aspect ratio",
+  "cinematix.transport.loop": "Loop"
 }

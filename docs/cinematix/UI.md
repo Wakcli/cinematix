@@ -9,6 +9,26 @@ McLib (`mchorse/mclib`) are MIT licensed; the icon sheet is copied with the noti
 rules (the Java itself is not compiled or shipped). See `ui/dashboard` and `ui/utils/icons` on the
 `dev` branch for the reference the current work follows.
 
+## 0. The control language
+
+[`UIprim.svg`](UIprim.svg) is the supplied primitive sheet: a bounded fill bar, a bipolar
+centre-zero bar, a drag-number box, a three-axis vector row, a linked dimension pair, stepped
+presets, a dual-handle range track, a cycle/time gradient, a colour swatch with hex, and the
+checkbox/keyframe-rail states. The editor's inspector and timeline use it directly:
+
+| Primitive | Used by |
+|---|---|
+| Bounded fill bar, drag-number box | every scalar `Field` in the inspector |
+| Bipolar centre-zero | camera Yaw/Pitch rows |
+| Three-axis vector row | camera Position X/Y/Z and Rotation Yaw/Pitch |
+| Linked dimension pair | render Width/Height, with the chain toggle |
+| Stepped presets | render FPS 24/30/60/120 |
+| Dual-handle range track | the selected clip's start/end in the Clips tab |
+| Cycle/time gradient | the World section's Time |
+| Colour swatch + hex | World Sky and Fog colours |
+| Checkbox | the transport's Loop |
+| Keyframe rail states | the dope-sheet row gutter: unkeyed, animated, keyed at the playhead |
+
 ## 1. What Horizon already gives us
 
 Verified in [AUDIT.md](AUDIT.md). Do not reimplement any of this.

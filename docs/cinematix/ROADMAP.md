@@ -32,7 +32,7 @@ restoring everything.
 | Overlay card, context menu | partial — right-click menus on rows/keys/lanes with add/delete/interpolation/fit; mute, rename and paste are drawn dimmed and inert; no overlay card yet |
 | Top toolbar (save/undo/redo/render) | done — Save writes the default `.cmx`, Undo/Redo drive the history, Render starts an MP4 of the film range at the document's resolution and fps (needs `--offscreen` and a still world, and says why otherwise) |
 | Bottom dock tabs (Dope Sheet / Curve Editor / Clips) | done — Dope Sheet, Curve Editor and Clips; Clips is a shot list over the one timeline, Add clip takes the visible range, clicking a clip seeks and zooms to it, x deletes, both undo |
-| Numeric scrubber | done — drawn with a track; drag with Shift ×10 and Ctrl ÷10 |
+| Numeric scrubber | done — bounded fill bars and drag-number boxes from the supplied primitive kit; drag with Shift ×10 and Ctrl ÷10; camera Position and Yaw/Pitch vector rows |
 | Viewport: live world + editor camera | done — the film camera renders while the screen is open; WASD/E/Q fly, right-drag look, FOV live |
 | Timeline: ruler, playhead, key rows, transport | done — drawn, scrubbable, keys move in time |
 | Channel list and key insertion/deletion | done — `Document`, `K`, `X`, `Delete`, rows |

@@ -51,6 +51,94 @@ impl InspectorTab {
     }
 }
 
+/// The two camera vector rows above the scalar fields: a position (X/Y/Z) and a view direction
+/// (yaw/pitch). Both edit the camera at the playhead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VectorRow {
+    Position,
+    Rotation,
+}
+
+impl VectorRow {
+    pub fn label(self) -> &'static str {
+        match self {
+            VectorRow::Position => "cinematix.vector.position",
+            VectorRow::Rotation => "cinematix.vector.rotation",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Axis {
+    PositionX,
+    PositionY,
+    PositionZ,
+    Yaw,
+    Pitch,
+}
+
+impl Axis {
+    pub fn label(self) -> &'static str {
+        match self {
+            Axis::PositionX => "X",
+            Axis::PositionY => "Y",
+            Axis::PositionZ => "Z",
+            Axis::Yaw => "Yaw",
+            Axis::Pitch => "Pitch",
+        }
+    }
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Axis::PositionX => "cinematix.axis.position_x",
+            Axis::PositionY => "cinematix.axis.position_y",
+            Axis::PositionZ => "cinematix.axis.position_z",
+            Axis::Yaw => "cinematix.axis.yaw",
+            Axis::Pitch => "cinematix.axis.pitch",
+        }
+    }
+
+    pub fn is_position(self) -> bool {
+        matches!(self, Axis::PositionX | Axis::PositionY | Axis::PositionZ)
+    }
+
+    pub fn component(self) -> usize {
+        match self {
+            Axis::PositionX => 0,
+            Axis::PositionY => 1,
+            Axis::PositionZ => 2,
+            Axis::Yaw | Axis::Pitch => 0,
+        }
+    }
+
+    pub fn range(self) -> (f64, f64, f64) {
+        match self {
+            Axis::PositionX | Axis::PositionY | Axis::PositionZ => {
+                (-30_000_000.0, 30_000_000.0, 0.1)
+            }
+            Axis::Yaw => (-180.0, 180.0, 0.5),
+            Axis::Pitch => (-90.0, 90.0, 0.5),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ColorKind {
+    Sky,
+    Fog,
+}
+
+impl ColorKind {
+    pub const ALL: [ColorKind; 2] = [ColorKind::Sky, ColorKind::Fog];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorKind::Sky => "cinematix.color.sky",
+            ColorKind::Fog => "cinematix.color.fog",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Save,
@@ -111,6 +199,13 @@ pub struct Frame {
     pub rail_items: Vec<(Section, Rect)>,
     pub buttons: Vec<(Button, Rect)>,
     pub fields: Vec<(Field, Rect)>,
+    pub vectors: Vec<(VectorRow, Option<Rect>, Vec<(Axis, Rect)>)>,
+    pub fps_presets: Vec<(u32, Rect)>,
+    pub size_pair: Option<(Rect, Rect, Rect)>,
+    pub color_rows: Vec<(ColorKind, Rect)>,
+    pub clip_track: Option<Rect>,
+    pub clip_handles: Vec<(u8, Rect)>,
+    pub loop_check: Rect,
     pub rows: Vec<Row>,
     pub tree: Vec<(NodeId, usize, bool, Rect)>,
     pub tree_toggle: Vec<(NodeId, Rect)>,
@@ -132,6 +227,7 @@ impl Frame {
         expanded: &HashSet<NodeId>,
         inspector_tab: InspectorTab,
         inspector_float: Option<Rect>,
+        selected_clip: Option<usize>,
     ) -> Self {
         let (w, h) = size;
         let t = Tokens::default();
@@ -293,21 +389,90 @@ impl Frame {
             x += rect.w + t.gap;
         }
 
+        let loop_check = if timeline.w > 360.0 {
+            Rect::new(timeline.x + 280.0, timeline.y + 2.0, 60.0, 16.0)
+        } else {
+            Rect::new(0.0, 0.0, 0.0, 0.0)
+        };
+
         let mut fields = Vec::new();
+        let mut vectors = Vec::new();
+        let mut color_rows = Vec::new();
+        let mut fps_presets = Vec::new();
+        let mut size_pair = None;
+        let pad = t.pad;
+        let left = inspector.x + pad;
+        let inner_w = (inspector.w - pad * 2.0).max(20.0);
+        let limit = inspector.y + inspector.h - pad;
         let mut fy = inspector.y + 42.0;
         if inspector_tab == InspectorTab::Properties {
             for f in fields_for(section) {
-                let rect = Rect::new(
-                    inspector.x + t.pad,
-                    fy,
-                    (inspector.w - t.pad * 2.0).max(20.0),
-                    20.0,
-                );
-                if rect.y + rect.h > inspector.y + inspector.h - t.pad {
+                let rect = Rect::new(left, fy, inner_w, 20.0);
+                if rect.y + rect.h > limit {
                     break;
                 }
                 fields.push((*f, rect));
                 fy += 24.0;
+            }
+            if section == Section::Camera && fy + 44.0 < limit {
+                fy += 4.0;
+                for row in [VectorRow::Position, VectorRow::Rotation] {
+                    let label = Rect::new(left, fy, inner_w, 12.0);
+                    fy += 14.0;
+                    let axes: &[Axis] = match row {
+                        VectorRow::Position => &[Axis::PositionX, Axis::PositionY, Axis::PositionZ],
+                        VectorRow::Rotation => &[Axis::Yaw, Axis::Pitch],
+                    };
+                    let gap = 4.0;
+                    let bw =
+                        ((inner_w - gap * (axes.len() as f32 - 1.0)) / axes.len() as f32).max(18.0);
+                    let mut ax = left;
+                    let mut rects = Vec::with_capacity(axes.len());
+                    for axis in axes {
+                        if fy + 22.0 > limit {
+                            break;
+                        }
+                        rects.push((*axis, Rect::new(ax, fy, bw, 22.0)));
+                        ax += bw + gap;
+                    }
+                    fy += 28.0;
+                    vectors.push((row, Some(label), rects));
+                }
+            }
+            if section == Section::Render {
+                let label = Rect::new(left, fy, inner_w, 12.0);
+                let label_w = 28.0;
+                let gap = 4.0;
+                let bw = ((inner_w - label_w - gap * 3.0) / 4.0).max(18.0);
+                let mut bx = left + label_w;
+                for fps in [24u32, 30, 60, 120] {
+                    if bx + bw > left + inner_w + 0.01 {
+                        break;
+                    }
+                    fps_presets.push((fps, Rect::new(bx, fy, bw, 22.0)));
+                    bx += bw + gap;
+                }
+                let _ = label;
+                fy += 32.0;
+                if fy + 24.0 <= limit {
+                    let link_w = 16.0;
+                    let bw = ((inner_w - link_w - gap * 2.0) / 2.0).max(24.0);
+                    let w = Rect::new(left, fy, bw, 24.0);
+                    let link = Rect::new(left + bw + gap, fy + 4.0, link_w, 16.0);
+                    let h = Rect::new(left + bw + gap + link_w + gap, fy, bw, 24.0);
+                    size_pair = Some((w, h, link));
+                    fy += 32.0;
+                }
+            }
+            if section == Section::World {
+                fy += 4.0;
+                for kind in ColorKind::ALL {
+                    if fy + 24.0 > limit {
+                        break;
+                    }
+                    color_rows.push((kind, Rect::new(left, fy, inner_w, 24.0)));
+                    fy += 28.0;
+                }
             }
         }
 
@@ -323,6 +488,22 @@ impl Frame {
             clips.push((i, row));
             clip_delete.push((i, Rect::new(row.x + row.w - 18.0, cy + 2.0, 16.0, 16.0)));
             cy += ROW_H;
+        }
+        let mut clip_track = None;
+        let mut clip_handles = Vec::new();
+        if let Some(i) = selected_clip
+            && let Some(clip) = doc.scene.meta.clips.get(i)
+            && cy + 20.0 <= transport.y
+        {
+            let track = Rect::new(lanes.x + 8.0, cy + 4.0, (lanes.w - 16.0).max(20.0), 14.0);
+            let (r0, r1) = doc.scene.meta.range;
+            let span = (r1 - r0).max(1e-9);
+            let x_at = |t: f64| track.x + (((t - r0) / span).clamp(0.0, 1.0) as f32) * track.w;
+            for (edge, t) in [(0u8, clip.start), (1u8, clip.end)] {
+                let x = x_at(t);
+                clip_handles.push((edge, Rect::new(x - 2.0, track.y - 1.0, 4.0, track.h + 2.0)));
+            }
+            clip_track = Some(track);
         }
 
         let mut rows = Vec::new();
@@ -431,6 +612,13 @@ impl Frame {
             rail_items,
             buttons,
             fields,
+            vectors,
+            fps_presets,
+            size_pair,
+            color_rows,
+            clip_track,
+            clip_handles,
+            loop_check,
             rows,
             tree,
             tree_toggle,
@@ -470,6 +658,7 @@ mod tests {
             &std::collections::HashSet::new(),
             InspectorTab::Properties,
             None,
+            None,
         );
         assert_eq!(f.header.w, 1280.0);
         assert!(f.rail.x + f.rail.w <= f.viewport.x + 0.01);
@@ -493,6 +682,7 @@ mod tests {
                 None,
                 &std::collections::HashSet::new(),
                 InspectorTab::Properties,
+                None,
                 None,
             );
             for r in [
@@ -524,11 +714,68 @@ mod tests {
             &std::collections::HashSet::new(),
             InspectorTab::Properties,
             None,
+            None,
         );
         assert_eq!(f.rail_items.len(), Section::ALL.len());
         for (s, r) in &f.rail_items {
             assert!(f.rail.contains(r.x, r.y), "{s:?}");
             assert!(f.rail.contains(r.x + r.w, r.y + r.h), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn the_camera_inspector_has_two_vector_rows_inside_the_panel() {
+        let doc = Document::new();
+        let f = Frame::build(
+            &doc,
+            Section::Camera,
+            0,
+            (1280.0, 720.0),
+            0.38,
+            0.22,
+            None,
+            &std::collections::HashSet::new(),
+            InspectorTab::Properties,
+            None,
+            None,
+        );
+        assert_eq!(f.vectors.len(), 2);
+        assert_eq!(f.vectors[0].2.len(), 3);
+        assert_eq!(f.vectors[1].2.len(), 2);
+        for (_, label, axes) in &f.vectors {
+            if let Some(l) = label {
+                assert!(f.inspector.contains(l.x, l.y));
+            }
+            for (_, r) in axes {
+                assert!(
+                    f.inspector.contains(r.x, r.y) && f.inspector.contains(r.x + r.w, r.y + r.h),
+                    "{r:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_render_inspector_has_presets_and_a_size_pair() {
+        let doc = Document::new();
+        let f = Frame::build(
+            &doc,
+            Section::Render,
+            0,
+            (1280.0, 720.0),
+            0.38,
+            0.22,
+            None,
+            &std::collections::HashSet::new(),
+            InspectorTab::Properties,
+            None,
+            None,
+        );
+        assert!(f.fields.is_empty());
+        assert_eq!(f.fps_presets.len(), 4);
+        let (w, h, link) = f.size_pair.unwrap();
+        for r in [w, h, link] {
+            assert!(f.inspector.contains(r.x, r.y));
         }
     }
 
@@ -545,6 +792,7 @@ mod tests {
             None,
             &std::collections::HashSet::new(),
             InspectorTab::Properties,
+            None,
             None,
         );
         assert_eq!(f.rows.first().map(|r| r.chan), Some(2));
@@ -567,6 +815,7 @@ mod tests {
             None,
             &std::collections::HashSet::new(),
             InspectorTab::Properties,
+            None,
             None,
         )
         .with_window(0.0, 10.0);

@@ -55,7 +55,7 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 | `crates/horizon-client-input/src/keybinds.rs` | `key.cinematix` = F8 (`misc`) | +2 |
 | `crates/horizon-client-input/src/actions.rs` | `Cinematix` action | +1 |
 | `crates/horizon-client/Cargo.toml` | `cinematix-editor` dependency | +1 |
-| `crates/horizon-client/assets/horizon/lang/en_us.json` | 124 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +125 −1 |
+| `crates/horizon-client/assets/horizon/lang/en_us.json` | 135 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +136 −1 |
 | `tools/layers.json` | six `cinematix-*` crates at `engine` | +10 −2 |
 
 Deliberate deviations from the rules above:

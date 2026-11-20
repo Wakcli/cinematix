@@ -1,6 +1,6 @@
 use crate::document::{kind_key, prop_key};
 use crate::editor::{Button, Editor, Field, Section};
-use crate::frame::{Frame, InspectorTab, ROW_H, Row};
+use crate::frame::{Frame, GUTTER_W, InspectorTab, ROW_H, Row};
 use crate::glyphs::{self, Icon};
 use cinematix_scene::NodeKind;
 use cinematix_ui::Rect;
@@ -21,6 +21,17 @@ const ACCENT: u32 = rgba(92, 156, 255, 255);
 const KEY: u32 = rgba(245, 246, 250, 255);
 const HOVER: u32 = rgba(43, 43, 43, 255);
 const ACTIVE: u32 = rgba(56, 56, 56, 255);
+const BOX_BG: u32 = rgba(27, 31, 36, 255);
+const BOX_BORDER: u32 = rgba(11, 12, 14, 255);
+const BOX_FILL: u32 = rgba(35, 49, 66, 255);
+const VALUE: u32 = rgba(240, 246, 252, 255);
+const CHEVRON: u32 = rgba(88, 166, 255, 255);
+const OUTLINE: u32 = rgba(87, 96, 106, 255);
+const ZERO_LINE: u32 = rgba(72, 79, 88, 255);
+const KEY_ANIM: u32 = rgba(38, 79, 120, 255);
+const AXIS_X: u32 = rgba(218, 54, 51, 255);
+const AXIS_Y: u32 = rgba(46, 160, 67, 255);
+const AXIS_Z: u32 = rgba(56, 139, 253, 255);
 
 fn fill(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, colour: u32) {
     if r.w <= 0.0 || r.h <= 0.0 {
@@ -72,6 +83,78 @@ fn right_text(batch: &mut HudBatch, atlas: &HudAtlas, right: f32, y: f32, t: &Te
 
 fn register(label: &Text, r: Rect) {
     widgets::record_as(&label.plain(), [r.x, r.y, r.w, r.h], true, Kind::Button);
+}
+
+fn box_frame(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect) {
+    fill(batch, atlas, r, BOX_BG);
+    batch.fill(atlas, r.x, r.y, r.w, 1.0, BOX_BORDER);
+    batch.fill(atlas, r.x, r.y + r.h - 1.0, r.w, 1.0, BOX_BORDER);
+    batch.fill(atlas, r.x, r.y, 1.0, r.h, BOX_BORDER);
+    batch.fill(atlas, r.x + r.w - 1.0, r.y, 1.0, r.h, BOX_BORDER);
+}
+
+fn chevron(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, cy: f32, filled: bool) {
+    let colour = if filled { CHEVRON } else { OUTLINE };
+    batch.fill_quad(
+        atlas,
+        [[x - 4.0, cy], [x, cy - 4.0], [x + 4.0, cy], [x, cy + 4.0]],
+        colour,
+    );
+}
+
+fn bar(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, frac: f32, bipolar: bool) {
+    let inner = Rect::new(
+        r.x + 1.0,
+        r.y + 1.0,
+        (r.w - 2.0).max(0.0),
+        (r.h - 2.0).max(0.0),
+    );
+    if inner.w <= 0.0 {
+        return;
+    }
+    let frac = frac.clamp(0.0, 1.0);
+    if bipolar {
+        let centre = inner.x + inner.w * 0.5;
+        let x = inner.x + inner.w * frac;
+        if x >= centre {
+            fill(
+                batch,
+                atlas,
+                Rect::new(centre, inner.y, x - centre, inner.h),
+                BOX_FILL,
+            );
+        } else {
+            fill(
+                batch,
+                atlas,
+                Rect::new(x, inner.y, centre - x, inner.h),
+                BOX_FILL,
+            );
+        }
+        batch.fill(atlas, centre, inner.y, 1.0, inner.h, ZERO_LINE);
+    } else {
+        fill(
+            batch,
+            atlas,
+            Rect::new(inner.x, inner.y, inner.w * frac, inner.h),
+            BOX_FILL,
+        );
+    }
+}
+
+fn left_label(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, t: &Text, colour: u32) {
+    text(batch, atlas, r.x + 8.0, r.y + (r.h - 8.0) * 0.5, t, colour);
+}
+
+fn value_label(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, value: &str, colour: u32) {
+    right_text(
+        batch,
+        atlas,
+        r.x + r.w - 14.0,
+        r.y + (r.h - 8.0) * 0.5,
+        &Text::literal(value),
+        colour,
+    );
 }
 
 /// A flat BBS-style icon button: a hover/active wash, the glyph centred, registered with the
@@ -422,6 +505,11 @@ fn draw_inspector(
         for (field, r) in &f.fields {
             draw_field(ed, *field, *r, batch, atlas, cursor);
         }
+        draw_vector_rows(ed, f, batch, atlas);
+        draw_render_controls(ed, f, batch, atlas);
+        for (kind, r) in &f.color_rows {
+            draw_color_row(ed, *kind, *r, batch, atlas);
+        }
     } else {
         for (id, _depth, has_children, r) in &f.tree {
             if ed.selected_node == Some(*id) {
@@ -478,23 +566,288 @@ fn draw_field(
     } else {
         ((v - min) / (max - min)) as f32
     };
-    let label = Text::translate(field.label(), &[])
-        .append(Text::literal(format!(": {}", field.text(&ed.doc))));
-    ui::slider(
+    let label = Text::translate(field.label(), &[]);
+    let value = format!("{}{}", field.text(&ed.doc), field.unit());
+    let hover = r.contains(cursor.0, cursor.1);
+    let held = ed.dragging_field(field);
+    if field == Field::Time {
+        draw_time_field(batch, atlas, r, &label, &value, frac, hover, held);
+    } else {
+        box_frame(batch, atlas, r);
+        bar(batch, atlas, r, frac, false);
+        left_label(
+            batch,
+            atlas,
+            r,
+            &label,
+            if hover || held { VALUE } else { DIM },
+        );
+        value_label(batch, atlas, r, &value, VALUE);
+        chevron(batch, atlas, r.x + r.w - 8.0, r.y + r.h * 0.5, true);
+    }
+    register(&label, r);
+}
+
+fn draw_time_field(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    r: Rect,
+    label: &Text,
+    value: &str,
+    frac: f32,
+    hover: bool,
+    held: bool,
+) {
+    box_frame(batch, atlas, r);
+    let track = Rect::new(r.x + 2.0, r.y + 9.0, (r.w - 4.0).max(1.0), 10.0);
+    const STOPS: [[f32; 3]; 5] = [
+        [0.086, 0.106, 0.149],
+        [0.361, 0.255, 0.157],
+        [0.169, 0.298, 0.435],
+        [0.369, 0.227, 0.161],
+        [0.086, 0.106, 0.149],
+    ];
+    let steps = 64;
+    for i in 0..steps {
+        let t = i as f32 / (steps - 1) as f32;
+        let seg = (t * 4.0).min(3.999);
+        let a = seg.floor() as usize;
+        let u = seg - a as f32;
+        let c =
+            std::array::from_fn::<f32, 3, _>(|k| STOPS[a][k] + (STOPS[a + 1][k] - STOPS[a][k]) * u);
+        batch.fill(
+            atlas,
+            track.x + track.w * i as f32 / steps as f32,
+            track.y,
+            track.w / steps as f32 + 1.0,
+            track.h,
+            rgba(
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+                255,
+            ),
+        );
+    }
+    let x = track.x + track.w * frac.clamp(0.0, 1.0);
+    batch.fill(atlas, x - 1.0, track.y - 2.0, 2.0, track.h + 4.0, VALUE);
+    text(
         batch,
         atlas,
-        r.x,
-        r.y,
-        r.w,
-        &label,
-        frac,
-        r.contains(cursor.0, cursor.1),
-        true,
-        ed.dragging_field(field),
+        r.x + 8.0,
+        r.y + 1.0,
+        label,
+        if hover || held { VALUE } else { DIM },
+    );
+    right_text(
+        batch,
+        atlas,
+        r.x + r.w - 8.0,
+        r.y + 1.0,
+        &Text::literal(value),
+        VALUE,
+    );
+    chevron(batch, atlas, r.x + r.w - 8.0, r.y + 5.0, false);
+}
+
+fn draw_vector_rows(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    for (row, label, axes) in &f.vectors {
+        if let Some(lr) = label {
+            tr(batch, atlas, lr.x, lr.y + 1.0, row.label(), DIM);
+        }
+        for (axis, r) in axes {
+            box_frame(batch, atlas, *r);
+            if !axis.is_position() {
+                let (min, max, _) = axis.range();
+                let v = ed.axis_value(*axis).clamp(min, max);
+                let frac = ((v - min) / (max - min)) as f32;
+                bar(batch, atlas, *r, frac, true);
+            }
+            let edge = match axis {
+                crate::frame::Axis::PositionX => AXIS_X,
+                crate::frame::Axis::PositionY => AXIS_Y,
+                crate::frame::Axis::PositionZ => AXIS_Z,
+                crate::frame::Axis::Yaw | crate::frame::Axis::Pitch => CHEVRON,
+            };
+            batch.fill(atlas, r.x + 1.0, r.y + 1.0, 2.0, r.h - 2.0, edge);
+            text(
+                batch,
+                atlas,
+                r.x + 8.0,
+                r.y + (r.h - 8.0) * 0.5,
+                &Text::literal(axis.label()),
+                OUTLINE,
+            );
+            let value = format!("{:.2}", ed.axis_value(*axis));
+            right_text(
+                batch,
+                atlas,
+                r.x + r.w - 4.0,
+                r.y + (r.h - 8.0) * 0.5,
+                &Text::literal(value),
+                VALUE,
+            );
+            register(&Text::translate(axis.tag(), &[]), *r);
+        }
+    }
+}
+
+fn centered_text(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, t: &Text, colour: u32) {
+    let w = HudBatch::text_width(atlas, &t.plain());
+    text(
+        batch,
+        atlas,
+        r.x + (r.w - w) * 0.5,
+        r.y + (r.h - 8.0) * 0.5,
+        t,
+        colour,
     );
 }
 
+fn draw_render_controls(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    if let Some((_, first)) = f.fps_presets.first() {
+        tr(
+            batch,
+            atlas,
+            first.x - 26.0,
+            first.y + 7.0,
+            "cinematix.field.fps",
+            DIM,
+        );
+        let current = ed.fps().round() as u32;
+        for (fps, r) in &f.fps_presets {
+            box_frame(batch, atlas, *r);
+            let active = *fps == current;
+            if active {
+                fill(
+                    batch,
+                    atlas,
+                    Rect::new(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0),
+                    BOX_FILL,
+                );
+                batch.fill(atlas, r.x, r.y, r.w, 1.0, CHEVRON);
+                batch.fill(atlas, r.x, r.y + r.h - 1.0, r.w, 1.0, CHEVRON);
+                batch.fill(atlas, r.x, r.y, 1.0, r.h, CHEVRON);
+                batch.fill(atlas, r.x + r.w - 1.0, r.y, 1.0, r.h, CHEVRON);
+            }
+            centered_text(
+                batch,
+                atlas,
+                *r,
+                &Text::literal(fps.to_string()),
+                if active { VALUE } else { DIM },
+            );
+            register(&Text::literal(fps.to_string()), *r);
+        }
+    }
+    if let Some((w, h, link)) = f.size_pair {
+        for (tag, r, value) in [
+            ("W", w, ed.doc.scene.meta.resolution.0),
+            ("H", h, ed.doc.scene.meta.resolution.1),
+        ] {
+            box_frame(batch, atlas, r);
+            text(
+                batch,
+                atlas,
+                r.x + 8.0,
+                r.y + (r.h - 8.0) * 0.5,
+                &Text::literal(tag),
+                OUTLINE,
+            );
+            right_text(
+                batch,
+                atlas,
+                r.x + r.w - 6.0,
+                r.y + (r.h - 8.0) * 0.5,
+                &Text::literal(value.to_string()),
+                VALUE,
+            );
+            register(&Text::literal(tag), r);
+        }
+        box_frame(batch, atlas, link);
+        if ed.resolution_linked {
+            batch.fill(atlas, link.x + 3.0, link.y + 5.0, 4.0, 4.0, CHEVRON);
+            batch.fill(atlas, link.x + 9.0, link.y + 7.0, 4.0, 4.0, CHEVRON);
+        } else {
+            batch.fill(atlas, link.x + 4.0, link.y + 6.0, 4.0, 4.0, OUTLINE);
+            batch.fill(atlas, link.x + 8.0, link.y + 6.0, 4.0, 4.0, OUTLINE);
+        }
+        register(&Text::translate("cinematix.render.link", &[]), link);
+    }
+}
+
+fn draw_color_row(
+    ed: &Editor,
+    kind: crate::frame::ColorKind,
+    r: Rect,
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+) {
+    let default = match kind {
+        crate::frame::ColorKind::Sky => [0.471, 0.655, 1.0],
+        crate::frame::ColorKind::Fog => [0.753, 0.847, 1.0],
+    };
+    let colour = match kind {
+        crate::frame::ColorKind::Sky => ed.doc.scene.meta.environment.sky_color,
+        crate::frame::ColorKind::Fog => ed.doc.scene.meta.environment.fog_color,
+    }
+    .unwrap_or(default);
+    box_frame(batch, atlas, r);
+    left_label(batch, atlas, r, &Text::translate(kind.label(), &[]), DIM);
+    let swatch = Rect::new(r.x + r.w - 86.0, r.y + 4.0, 16.0, 16.0);
+    fill(
+        batch,
+        atlas,
+        swatch,
+        rgba(
+            (colour[0] * 255.0) as u8,
+            (colour[1] * 255.0) as u8,
+            (colour[2] * 255.0) as u8,
+            255,
+        ),
+    );
+    batch.fill(atlas, swatch.x, swatch.y, swatch.w, 1.0, BOX_BORDER);
+    batch.fill(
+        atlas,
+        swatch.x,
+        swatch.y + swatch.h - 1.0,
+        swatch.w,
+        1.0,
+        BOX_BORDER,
+    );
+    batch.fill(atlas, swatch.x, swatch.y, 1.0, swatch.h, BOX_BORDER);
+    batch.fill(
+        atlas,
+        swatch.x + swatch.w - 1.0,
+        swatch.y,
+        1.0,
+        swatch.h,
+        BOX_BORDER,
+    );
+    let hex = format!(
+        "#{:02X}{:02X}{:02X}",
+        (colour[0] * 255.0) as u8,
+        (colour[1] * 255.0) as u8,
+        (colour[2] * 255.0) as u8
+    );
+    right_text(
+        batch,
+        atlas,
+        r.x + r.w - 22.0,
+        r.y + (r.h - 8.0) * 0.5,
+        &Text::literal(hex),
+        VALUE,
+    );
+    chevron(batch, atlas, r.x + r.w - 8.0, r.y + r.h * 0.5, false);
+    register(&Text::translate(kind.label(), &[]), r);
+}
+
 fn draw_summary(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    // The camera's vector rows already show its pose, and at a short window the footer would
+    // cover the Rotation row; the footer is for the sections that have room for it.
+    if ed.section == Section::Camera && !f.vectors.is_empty() {
+        return;
+    }
     let x = f.inspector.x + 6.0;
     let bottom = f.inspector.y + f.inspector.h - 8.0;
     let line_h = 12.0;
@@ -663,6 +1016,34 @@ fn draw_timeline(
         FAINT,
     );
 
+    if f.loop_check.w > 0.0 {
+        let check = Rect::new(f.loop_check.x, f.loop_check.y, 16.0, 16.0);
+        box_frame(batch, atlas, check);
+        if ed.looping {
+            fill(
+                batch,
+                atlas,
+                Rect::new(check.x + 4.0, check.y + 4.0, 8.0, 8.0),
+                CHEVRON,
+            );
+        }
+        tr(
+            batch,
+            atlas,
+            check.x + 22.0,
+            check.y + 4.0,
+            "cinematix.transport.loop",
+            if f.loop_check.contains(cursor.0, cursor.1) {
+                VALUE
+            } else {
+                DIM
+            },
+        );
+        register(
+            &Text::translate("cinematix.transport.loop", &[]),
+            f.loop_check,
+        );
+    }
     draw_ruler(ed, f, batch, atlas);
     match ed.tab {
         crate::frame::TimelineTab::Curves => draw_curve(ed, f, batch, atlas),
@@ -778,6 +1159,26 @@ fn draw_clips(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas, cu
         }
         register(&name, *r);
     }
+    if let Some(track) = f.clip_track {
+        box_frame(batch, atlas, track);
+        if f.clip_handles.len() == 2 {
+            let a = f.clip_handles[0].1.x + 2.0;
+            let b = f.clip_handles[1].1.x + 2.0;
+            if b > a {
+                fill(
+                    batch,
+                    atlas,
+                    Rect::new(a, track.y + 1.0, b - a, track.h - 2.0),
+                    KEY_ANIM,
+                );
+            }
+            for (_, r) in &f.clip_handles {
+                fill(batch, atlas, *r, OUTLINE);
+                batch.fill(atlas, r.x, r.y, 1.0, r.h, BOX_BORDER);
+                batch.fill(atlas, r.x + r.w - 1.0, r.y, 1.0, r.h, BOX_BORDER);
+            }
+        }
+    }
     if ed.doc.scene.meta.clips.is_empty() {
         centered(batch, atlas, f, "cinematix.clip.empty");
     }
@@ -879,12 +1280,47 @@ fn draw_rows(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
         if i % 2 == 1 {
             fill(batch, atlas, band, ROW_ALT);
         }
-        draw_row_label(ed, row, batch, atlas);
+        draw_row_label(
+            ed,
+            row,
+            batch,
+            atlas,
+            if i % 2 == 1 { ROW_ALT } else { PANEL_BG },
+        );
         draw_keys(ed, f, row, batch, atlas);
     }
 }
 
-fn draw_row_label(ed: &Editor, row: &Row, batch: &mut HudBatch, atlas: &HudAtlas) {
+fn key_state(ch: &cinematix_anim::Channel, t: f64, fps: f32) -> u8 {
+    if ch.keys.is_empty() {
+        0
+    } else if ch
+        .keys
+        .iter()
+        .any(|k| (k.t - t).abs() <= 0.5 / f64::from(fps.max(1.0)))
+    {
+        2
+    } else {
+        1
+    }
+}
+
+fn state_diamond(batch: &mut HudBatch, atlas: &HudAtlas, cx: f32, cy: f32, state: u8, inner: u32) {
+    let diamond = |r: f32| [[cx, cy - r], [cx + r, cy], [cx, cy + r], [cx - r, cy]];
+    match state {
+        0 => {
+            batch.fill_quad(atlas, diamond(4.0), OUTLINE);
+            batch.fill_quad(atlas, diamond(3.0), inner);
+        }
+        1 => {
+            batch.fill_quad(atlas, diamond(4.0), CHEVRON);
+            batch.fill_quad(atlas, diamond(3.0), KEY_ANIM);
+        }
+        _ => batch.fill_quad(atlas, diamond(4.0), CHEVRON),
+    }
+}
+
+fn draw_row_label(ed: &Editor, row: &Row, batch: &mut HudBatch, atlas: &HudAtlas, band: u32) {
     let Some(ch) = ed.doc.channel(row.chan) else {
         return;
     };
@@ -904,6 +1340,15 @@ fn draw_row_label(ed: &Editor, row: &Row, batch: &mut HudBatch, atlas: &HudAtlas
     } else {
         DIM
     };
+    let state = key_state(ch, ed.time(), ed.fps());
+    state_diamond(
+        batch,
+        atlas,
+        row.label.x + GUTTER_W - 12.0,
+        row.label.y + row.label.h * 0.5,
+        state,
+        band,
+    );
     text(
         batch,
         atlas,
@@ -1059,6 +1504,25 @@ fn draw_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_channel_reads_as_unkeyed_animated_or_keyed_at_the_playhead() {
+        use cinematix_anim::{Channel, Key, Prop, PropPath, Value};
+        use cinematix_scene::NodeId;
+        let mut ch = Channel::new(PropPath {
+            node: NodeId(1),
+            prop: Prop::Fov,
+        });
+        assert_eq!(key_state(&ch, 0.0, 24.0), 0);
+        ch.keys.push(Key {
+            t: 0.0,
+            v: Value::F32(70.0),
+            interp: cinematix_anim::Interp::Linear,
+        });
+        assert_eq!(key_state(&ch, 0.0, 24.0), 2);
+        assert_eq!(key_state(&ch, 0.01, 24.0), 2);
+        assert_eq!(key_state(&ch, 0.1, 24.0), 1);
+    }
 
     #[test]
     fn every_field_has_a_translation_key_and_a_bounded_range() {

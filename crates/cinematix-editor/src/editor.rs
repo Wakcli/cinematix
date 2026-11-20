@@ -136,7 +136,7 @@ pub fn fields_for(section: Section) -> &'static [Field] {
             Field::Shake,
             Field::ShakeFrequency,
         ],
-        Section::Render => &[Field::Fps, Field::Width, Field::Height],
+        Section::Render => &[],
         Section::World => &[
             Field::Time,
             Field::Rain,
@@ -262,6 +262,18 @@ impl Field {
         }
     }
 
+    pub fn unit(self) -> &'static str {
+        match self {
+            Field::Fov | Field::Shake => "°",
+            Field::Near | Field::Far | Field::Focus | Field::FogStart | Field::FogEnd => " m",
+            Field::Fps => " fps",
+            Field::Width | Field::Height => " px",
+            Field::Time => " t",
+            Field::ShakeFrequency => " Hz",
+            Field::Aperture | Field::Rain | Field::Thunder => "",
+        }
+    }
+
     pub fn text(self, doc: &Document) -> String {
         let v = self.get(doc);
         match self {
@@ -342,6 +354,22 @@ enum Drag {
         b: (f32, f32),
         which: u8,
     },
+    CameraAxis {
+        axis: crate::frame::Axis,
+        start: f64,
+        start_x: f32,
+        base_pos: Vec3,
+        base_rot: Quat,
+    },
+    Dimension {
+        which: u8,
+        start: (u32, u32),
+        start_x: f32,
+    },
+    ClipEdge {
+        clip: usize,
+        edge: u8,
+    },
 }
 
 /// The screen positions of key `ki` and the key after it in the curve plot, for handle geometry.
@@ -380,6 +408,8 @@ pub struct Editor {
     pub inspector_tab: crate::frame::InspectorTab,
     /// The inspector's rect while it is torn out of the right dock, as a floating panel.
     pub inspector_float: Option<Rect>,
+    /// Whether the render width/height pair keeps its aspect ratio.
+    pub resolution_linked: bool,
     pub curve_axis: usize,
     pub expanded: std::collections::HashSet<cinematix_scene::NodeId>,
     /// Bumped whenever the document changes, so the world overlay re-resolves after an undo or a
@@ -424,6 +454,7 @@ impl Editor {
             tab: crate::frame::TimelineTab::DopeSheet,
             inspector_tab: crate::frame::InspectorTab::Properties,
             inspector_float: None,
+            resolution_linked: true,
             curve_axis: 0,
             expanded: Default::default(),
             revision: 0,
@@ -464,6 +495,7 @@ impl Editor {
             &self.expanded,
             self.inspector_tab,
             self.inspector_float,
+            self.selected_clip,
         )
         .with_window(self.t0, self.t1)
     }
@@ -548,6 +580,14 @@ impl Editor {
 
     pub fn fps(&self) -> f32 {
         self.doc.scene.meta.fps.max(1.0)
+    }
+
+    /// Sets the film rate and the playhead's frame counter together; changing one without the
+    /// other makes the frame readout and the exported frame numbers disagree.
+    pub fn set_fps(&mut self, fps: f32) {
+        let fps = fps.clamp(1.0, 240.0);
+        self.doc.scene.meta.fps = fps;
+        self.playhead.fps = fps.round().max(1.0);
     }
 
     pub fn range(&self) -> (f64, f64) {
@@ -874,10 +914,26 @@ impl Editor {
                 return true;
             }
         }
+        if f.loop_check.contains(pos.0, pos.1) {
+            self.looping = !self.looping;
+            return true;
+        }
         if self.tab == crate::frame::TimelineTab::Clips {
             if f.clip_add.contains(pos.0, pos.1) {
                 self.add_clip();
                 return true;
+            }
+            for (edge, r) in &f.clip_handles {
+                if r.contains(pos.0, pos.1)
+                    && let Some(i) = self.selected_clip
+                {
+                    self.checkpoint();
+                    self.drag = Some(Drag::ClipEdge {
+                        clip: i,
+                        edge: *edge,
+                    });
+                    return true;
+                }
             }
             for (i, r) in &f.clip_delete {
                 if r.contains(pos.0, pos.1) {
@@ -975,6 +1031,63 @@ impl Editor {
                 return true;
             }
         }
+        for (_, _, axes) in &f.vectors {
+            for (axis, r) in axes {
+                if r.contains(pos.0, pos.1) {
+                    let (base_pos, base_rot) = match self.camera_at(self.playhead.t) {
+                        Some(pose) => pose,
+                        None => return true,
+                    };
+                    self.checkpoint();
+                    let start = match axis {
+                        crate::frame::Axis::PositionX
+                        | crate::frame::Axis::PositionY
+                        | crate::frame::Axis::PositionZ => f64::from(base_pos[axis.component()]),
+                        crate::frame::Axis::Yaw => f64::from(view_from_rotation(base_rot).0),
+                        crate::frame::Axis::Pitch => f64::from(view_from_rotation(base_rot).1),
+                    };
+                    self.drag = Some(Drag::CameraAxis {
+                        axis: *axis,
+                        start,
+                        start_x: pos.0,
+                        base_pos,
+                        base_rot,
+                    });
+                    return true;
+                }
+            }
+        }
+        for (fps, r) in &f.fps_presets {
+            if r.contains(pos.0, pos.1) {
+                self.checkpoint();
+                self.set_fps(*fps as f32);
+                return true;
+            }
+        }
+        if let Some((w, h, link)) = f.size_pair {
+            if link.contains(pos.0, pos.1) {
+                self.resolution_linked = !self.resolution_linked;
+                return true;
+            }
+            for (which, r) in [(0u8, w), (1u8, h)] {
+                if r.contains(pos.0, pos.1) {
+                    self.checkpoint();
+                    self.drag = Some(Drag::Dimension {
+                        which,
+                        start: self.doc.scene.meta.resolution,
+                        start_x: pos.0,
+                    });
+                    return true;
+                }
+            }
+        }
+        for (kind, r) in &f.color_rows {
+            if r.contains(pos.0, pos.1) {
+                self.checkpoint();
+                self.cycle_color(*kind);
+                return true;
+            }
+        }
         for (id, r) in &f.tree_toggle {
             if r.contains(pos.0, pos.1) {
                 if !self.expanded.remove(id) {
@@ -1013,6 +1126,41 @@ impl Editor {
         self.checkpoint();
         self.doc.scene.meta.clips.remove(i);
         self.selected_clip = None;
+    }
+
+    fn cycle_color(&mut self, kind: crate::frame::ColorKind) {
+        const SKY: [[f32; 3]; 8] = [
+            [0.471, 0.655, 1.0],
+            [0.361, 0.553, 1.0],
+            [1.0, 0.698, 0.420],
+            [1.0, 0.478, 0.349],
+            [0.545, 0.420, 1.0],
+            [0.435, 0.827, 0.780],
+            [0.851, 0.902, 1.0],
+            [0.086, 0.106, 0.149],
+        ];
+        const FOG: [[f32; 3]; 8] = [
+            [0.753, 0.847, 1.0],
+            [0.659, 0.769, 0.910],
+            [0.847, 0.765, 0.647],
+            [0.718, 0.788, 0.839],
+            [0.902, 0.851, 0.784],
+            [0.561, 0.639, 0.722],
+            [1.0, 1.0, 1.0],
+            [0.086, 0.106, 0.149],
+        ];
+        let (current, palette) = match kind {
+            crate::frame::ColorKind::Sky => (self.doc.scene.meta.environment.sky_color, &SKY[..]),
+            crate::frame::ColorKind::Fog => (self.doc.scene.meta.environment.fog_color, &FOG[..]),
+        };
+        let next = match current.and_then(|c| palette.iter().position(|p| *p == c)) {
+            Some(i) => palette[(i + 1) % palette.len()],
+            None => palette[0],
+        };
+        match kind {
+            crate::frame::ColorKind::Sky => self.doc.scene.meta.environment.sky_color = Some(next),
+            crate::frame::ColorKind::Fog => self.doc.scene.meta.environment.fog_color = Some(next),
+        }
     }
 
     fn press_button(&mut self, b: Button) {
@@ -1090,6 +1238,117 @@ impl Editor {
                 self.inspector_frac = (start + (x - pos.0) / width).clamp(0.12, 0.4);
                 true
             }
+            Drag::ClipEdge { clip, edge } => {
+                let Some(track) = f.clip_track else {
+                    return false;
+                };
+                let (r0, r1) = self.range();
+                let frac = ((pos.0 - track.x) / track.w.max(1.0)).clamp(0.0, 1.0);
+                let t = r0 + f64::from(frac) * (r1 - r0);
+                let min = f64::from(1.0 / self.fps());
+                match self.doc.scene.meta.clips.get_mut(clip) {
+                    Some(c) if edge == 0 => {
+                        c.start = t.clamp(r0, c.end - min);
+                        true
+                    }
+                    Some(c) => {
+                        c.end = t.clamp(c.start + min, r1);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            Drag::CameraAxis {
+                axis,
+                start,
+                start_x,
+                base_pos,
+                base_rot,
+            } => {
+                let (min, max, step) = axis.range();
+                let (scrub_min, scrub_max) = if axis == crate::frame::Axis::Yaw {
+                    (-360.0, 360.0)
+                } else {
+                    (min, max)
+                };
+                let mut value = cinematix_ui::Scrubber::new(start, scrub_min, scrub_max, step)
+                    .drag(pos.0 - start_x, mods);
+                if axis.is_position() {
+                    let mut p = base_pos;
+                    p[axis.component()] = value as f32;
+                    let id = self.doc.scene.camera;
+                    let t = self.playhead.t;
+                    match self.doc.channel_index(id, Prop::Translation) {
+                        Some(ci) if !self.doc.channels[ci].keys.is_empty() => self
+                            .doc
+                            .upsert_key(ci, t, Value::Vec3(p.to_array()))
+                            .is_some(),
+                        _ => self.doc.set_camera_translation(p),
+                    }
+                } else {
+                    let (mut yaw, mut pitch) = view_from_rotation(base_rot);
+                    match axis {
+                        crate::frame::Axis::Yaw => {
+                            while value > 180.0 {
+                                value -= 360.0;
+                            }
+                            while value <= -180.0 {
+                                value += 360.0;
+                            }
+                            yaw = value as f32;
+                        }
+                        crate::frame::Axis::Pitch => pitch = value as f32,
+                        _ => {}
+                    }
+                    let rot = rotation_from_view(yaw, pitch);
+                    let id = self.doc.scene.camera;
+                    let t = self.playhead.t;
+                    match self.doc.channel_index(id, Prop::Rotation) {
+                        Some(ci) if !self.doc.channels[ci].keys.is_empty() => self
+                            .doc
+                            .upsert_key(ci, t, Value::Quat(rot.to_array()))
+                            .is_some(),
+                        _ => self.doc.set_camera_rotation(rot),
+                    }
+                }
+            }
+            Drag::Dimension {
+                which,
+                start,
+                start_x,
+            } => {
+                let (mut w, mut h) = start;
+                let (min, max, step) = if which == 0 {
+                    Field::Width.range()
+                } else {
+                    Field::Height.range()
+                };
+                let base = if which == 0 {
+                    f64::from(w)
+                } else {
+                    f64::from(h)
+                };
+                let v = cinematix_ui::Scrubber::new(base, min, max, step)
+                    .drag(pos.0 - start_x, mods)
+                    .round()
+                    .clamp(16.0, 8192.0) as u32;
+                let v = v / 2 * 2;
+                if which == 0 {
+                    w = v;
+                    if self.resolution_linked {
+                        let ratio = start.0 as f32 / start.1.max(1) as f32;
+                        h = (((w as f32 / ratio).round() as u32).clamp(16, 8192)) / 2 * 2;
+                    }
+                } else {
+                    h = v;
+                    if self.resolution_linked {
+                        let ratio = start.0 as f32 / start.1.max(1) as f32;
+                        w = (((h as f32 * ratio).round() as u32).clamp(16, 8192)) / 2 * 2;
+                    }
+                }
+                self.doc.scene.meta.resolution = (w, h);
+                true
+            }
             Drag::Bezier {
                 chan,
                 key,
@@ -1159,8 +1418,16 @@ impl Editor {
 
     pub fn release(&mut self, pos: (f32, f32)) -> bool {
         let panel = matches!(self.drag, Some(Drag::Panel { .. }));
+        let clip = matches!(self.drag, Some(Drag::ClipEdge { .. }));
         if panel && self.inspector_float.is_some() && pos.0 >= self.size.0 - 48.0 {
             self.inspector_float = None;
+        }
+        if clip
+            && let Some(i) = self.selected_clip
+            && let Some(c) = self.doc.scene.meta.clips.get(i)
+        {
+            let (start, end) = (c.start, c.end);
+            self.set_window(start, end.max(start + MIN_SPAN));
         }
         self.drag.take().is_some()
     }
@@ -1325,6 +1592,20 @@ impl Editor {
             yaw,
             pitch,
         ))
+    }
+
+    /// A camera vector-row value at the playhead: a position component, or yaw/pitch.
+    pub fn axis_value(&self, axis: crate::frame::Axis) -> f64 {
+        let Some((position, rotation)) = self.camera_at(self.playhead.t) else {
+            return 0.0;
+        };
+        match axis {
+            crate::frame::Axis::PositionX => f64::from(position.x),
+            crate::frame::Axis::PositionY => f64::from(position.y),
+            crate::frame::Axis::PositionZ => f64::from(position.z),
+            crate::frame::Axis::Yaw => f64::from(view_from_rotation(rotation).0),
+            crate::frame::Axis::Pitch => f64::from(view_from_rotation(rotation).1),
+        }
     }
 
     /// The camera's field of view at the playhead.
@@ -2266,6 +2547,131 @@ mod tests {
         e.seek(0.5);
         let c = e.preview_view().unwrap();
         assert!((c.1 - a.1).abs() > 1e-4 || (c.2 - a.2).abs() > 1e-4);
+    }
+
+    #[test]
+    fn the_camera_vector_rows_edit_position_and_rotation() {
+        let mut e = editor();
+        e.seek_frame(12);
+        let f = e.frame();
+        let (_, paxes) = f
+            .vectors
+            .iter()
+            .find(|(row, _, _)| *row == crate::frame::VectorRow::Position)
+            .map(|(r, l, a)| (*r, (l, a)))
+            .unwrap();
+        let (_, px) = paxes
+            .1
+            .iter()
+            .find(|(a, _)| *a == crate::frame::Axis::PositionX)
+            .unwrap();
+        let before = e.doc.camera_transform().unwrap().translation.x;
+        assert!(e.press((px.x + 12.0, px.y + 8.0), Mods::default()));
+        e.drag_to((px.x + 52.0, px.y + 8.0), Mods::default());
+        e.release((0.0, 0.0));
+        let after = e.doc.camera_transform().unwrap().translation.x;
+        assert!(after > before, "{before} -> {after}");
+        assert!(e.undo());
+        assert!((e.doc.camera_transform().unwrap().translation.x - before).abs() < 1e-6);
+
+        let f = e.frame();
+        let (_, raxes) = f
+            .vectors
+            .iter()
+            .find(|(row, _, _)| *row == crate::frame::VectorRow::Rotation)
+            .map(|(r, l, a)| (*r, (l, a)))
+            .unwrap();
+        let (_, yaw) = raxes
+            .1
+            .iter()
+            .find(|(a, _)| *a == crate::frame::Axis::Yaw)
+            .unwrap();
+        let before = e.preview_view().unwrap().1;
+        assert!(e.press((yaw.x + 8.0, yaw.y + 8.0), Mods::default()));
+        e.drag_to((yaw.x + 40.0, yaw.y + 8.0), Mods::default());
+        e.release((0.0, 0.0));
+        assert!((e.preview_view().unwrap().1 - before).abs() > 0.1);
+    }
+
+    #[test]
+    fn the_render_section_has_working_fps_presets_and_a_linked_size_pair() {
+        let mut e = editor();
+        e.section = Section::Render;
+        let f = e.frame();
+        assert_eq!(f.fields.len(), 0);
+        assert_eq!(f.fps_presets.len(), 4);
+        let (_, sixty) = *f.fps_presets.iter().find(|(n, _)| *n == 60).unwrap();
+        assert!(e.press((sixty.x + 4.0, sixty.y + 4.0), Mods::default()));
+        assert!((e.fps() - 60.0).abs() < 0.01);
+        let f = e.frame();
+        let (w, _, link) = f.size_pair.unwrap();
+        let before = e.doc.scene.meta.resolution;
+        assert!(e.press((w.x + 8.0, w.y + 8.0), Mods::default()));
+        e.drag_to((w.x + 38.0, w.y + 8.0), Mods::default());
+        e.release((0.0, 0.0));
+        let after = e.doc.scene.meta.resolution;
+        assert!(after.0 > before.0);
+        assert_ne!(after.1, before.1);
+        assert_eq!(after.0 % 2, 0);
+        assert_eq!(after.1 % 2, 0);
+        assert!(e.resolution_linked);
+        assert!(e.press((link.x + 4.0, link.y + 4.0), Mods::default()));
+        assert!(!e.resolution_linked);
+    }
+
+    #[test]
+    fn a_clip_handle_edits_the_clip_and_its_window() {
+        let mut e = editor();
+        e.tab = crate::frame::TimelineTab::Clips;
+        let f = e.frame();
+        assert!(e.press((f.clip_add.x + 4.0, f.clip_add.y + 4.0), Mods::default()));
+        let f = e.frame();
+        let (i, row) = f.clips[0];
+        assert_eq!(i, 0);
+        assert!(e.press((row.x + 4.0, row.y + 4.0), Mods::default()));
+        let f = e.frame();
+        assert!(f.clip_track.is_some());
+        let (_, start) = f.clip_handles.iter().find(|(e, _)| *e == 0).unwrap();
+        let before = e.doc.scene.meta.clips[0].start;
+        assert!(e.press((start.x + 2.0, start.y + 4.0), Mods::default()));
+        e.drag_to((start.x + 40.0, start.y + 4.0), Mods::default());
+        e.release((0.0, 0.0));
+        let after = e.doc.scene.meta.clips[0].start;
+        assert!(after > before, "{before} -> {after}");
+        assert!((e.window().0 - after).abs() < 1e-6);
+        assert!(e.undo());
+        assert!((e.doc.scene.meta.clips[0].start - before).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_colour_row_cycles_the_environment_and_undoes() {
+        let mut e = editor();
+        e.section = Section::World;
+        let f = e.frame();
+        assert_eq!(f.color_rows.len(), 2);
+        let (_, sky) = f.color_rows[0];
+        assert!(e.doc.scene.meta.environment.sky_color.is_none());
+        assert!(e.press((sky.x + 20.0, sky.y + 8.0), Mods::default()));
+        let first = e.doc.scene.meta.environment.sky_color.unwrap();
+        assert!(e.press((sky.x + 20.0, sky.y + 8.0), Mods::default()));
+        let second = e.doc.scene.meta.environment.sky_color.unwrap();
+        assert_ne!(first, second);
+        assert!(e.undo());
+        assert_eq!(e.doc.scene.meta.environment.sky_color, Some(first));
+        assert!(e.undo());
+        assert!(e.doc.scene.meta.environment.sky_color.is_none());
+    }
+
+    #[test]
+    fn the_transport_loop_box_toggles_looping() {
+        let mut e = editor();
+        let f = e.frame();
+        assert!(e.looping);
+        assert!(e.press(
+            (f.loop_check.x + 8.0, f.loop_check.y + 8.0),
+            Mods::default()
+        ));
+        assert!(!e.looping);
     }
 
     #[test]
