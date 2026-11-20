@@ -46,7 +46,11 @@ impl Value {
 }
 
 fn lerp3(a: [f32; 3], b: [f32; 3], u: f32) -> [f32; 3] {
-    [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]
+    [
+        a[0] + (b[0] - a[0]) * u,
+        a[1] + (b[1] - a[1]) * u,
+        a[2] + (b[2] - a[2]) * u,
+    ]
 }
 
 fn lerp4(a: [f32; 4], b: [f32; 4], u: f32) -> [f32; 4] {
@@ -66,7 +70,10 @@ pub enum Interp {
     /// Uniform Catmull-Rom through the neighbouring keys, the curve Studio's camera path uses.
     /// Positional values bend through their keys instead of easing on each axis.
     Spline,
-    Bezier { out: [f32; 2], in_: [f32; 2] },
+    Bezier {
+        out: [f32; 2],
+        in_: [f32; 2],
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -85,7 +92,11 @@ pub struct Channel {
 
 impl Channel {
     pub fn new(target: PropPath) -> Self {
-        Self { target, keys: Vec::new(), muted: false }
+        Self {
+            target,
+            keys: Vec::new(),
+            muted: false,
+        }
     }
 
     pub fn sort(&mut self) {
@@ -106,7 +117,11 @@ impl Channel {
         let a = &self.keys[i - 1];
         let b = &self.keys[i];
         let span = b.t - a.t;
-        let u = if span <= f64::EPSILON { 1.0 } else { ((t - a.t) / span) as f32 };
+        let u = if span <= f64::EPSILON {
+            1.0
+        } else {
+            ((t - a.t) / span) as f32
+        };
         Some(blend(&self.keys, i, u))
     }
 }
@@ -175,12 +190,9 @@ fn extrapolate(a: Value, b: Value, backwards: bool) -> Value {
         (Value::Vec3(a), Value::Vec3(b)) => {
             Value::Vec3([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2])])
         }
-        (Value::Color(a), Value::Color(b)) => Value::Color([
-            f(a[0], b[0]),
-            f(a[1], b[1]),
-            f(a[2], b[2]),
-            f(a[3], b[3]),
-        ]),
+        (Value::Color(a), Value::Color(b)) => {
+            Value::Color([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2]), f(a[3], b[3])])
+        }
         (a, _) => a,
     }
 }
@@ -217,7 +229,10 @@ mod tests {
     use super::*;
 
     fn path() -> PropPath {
-        PropPath { node: NodeId(1), prop: Prop::Translation }
+        PropPath {
+            node: NodeId(1),
+            prop: Prop::Translation,
+        }
     }
 
     fn chan(keys: Vec<Key>) -> Channel {
@@ -227,11 +242,19 @@ mod tests {
     }
 
     fn k(t: f64, v: f32, interp: Interp) -> Key {
-        Key { t, v: Value::F32(v), interp }
+        Key {
+            t,
+            v: Value::F32(v),
+            interp,
+        }
     }
 
     fn v3(t: f64, x: f32, y: f32, z: f32, interp: Interp) -> Key {
-        Key { t, v: Value::Vec3([x, y, z]), interp }
+        Key {
+            t,
+            v: Value::Vec3([x, y, z]),
+            interp,
+        }
     }
 
     #[test]
@@ -241,10 +264,19 @@ mod tests {
             v3(1.0, 4.0, 66.0, 2.0, Interp::Spline),
             v3(2.0, 8.0, 64.0, 8.0, Interp::Spline),
         ]);
-        for (t, want) in [(0.0, [0.0, 64.0, 0.0]), (1.0, [4.0, 66.0, 2.0]), (2.0, [8.0, 64.0, 8.0])] {
-            let Some(Value::Vec3(got)) = c.eval(t) else { panic!("no value at {t}") };
+        for (t, want) in [
+            (0.0, [0.0, 64.0, 0.0]),
+            (1.0, [4.0, 66.0, 2.0]),
+            (2.0, [8.0, 64.0, 8.0]),
+        ] {
+            let Some(Value::Vec3(got)) = c.eval(t) else {
+                panic!("no value at {t}")
+            };
             for axis in 0..3 {
-                assert!((got[axis] - want[axis]).abs() < 1e-4, "t={t} axis={axis}: {got:?}");
+                assert!(
+                    (got[axis] - want[axis]).abs() < 1e-4,
+                    "t={t} axis={axis}: {got:?}"
+                );
             }
             assert!((c.eval(t).unwrap().lerp(Value::Vec3(want), 0.0) == Value::Vec3(want)));
         }
@@ -257,7 +289,9 @@ mod tests {
             v3(1.0, 1.0, 64.0, 0.0, Interp::Spline),
             v3(2.0, 1.0, 64.0, 1.0, Interp::Spline),
         ]);
-        let Some(Value::Vec3(mid)) = c.eval(0.5) else { panic!() };
+        let Some(Value::Vec3(mid)) = c.eval(0.5) else {
+            panic!()
+        };
         assert!(mid[0] > 0.5, "x should overshoot the chord: {mid:?}");
         assert!(mid[2] < 0.0, "z should dip below the first key: {mid:?}");
     }
@@ -268,7 +302,9 @@ mod tests {
             v3(0.0, 0.0, 64.0, 0.0, Interp::Spline),
             v3(2.0, 10.0, 70.0, -4.0, Interp::Spline),
         ]);
-        let Some(Value::Vec3(mid)) = c.eval(1.0) else { panic!() };
+        let Some(Value::Vec3(mid)) = c.eval(1.0) else {
+            panic!()
+        };
         assert!((mid[0] - 5.0).abs() < 1e-4, "{mid:?}");
         assert!((mid[1] - 67.0).abs() < 1e-4, "{mid:?}");
         assert!((mid[2] + 2.0).abs() < 1e-4, "{mid:?}");
@@ -279,10 +315,20 @@ mod tests {
         let a = Quat::from_rotation_y(0.0);
         let b = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
         let c = chan(vec![
-            Key { t: 0.0, v: Value::Quat(a.to_array()), interp: Interp::Spline },
-            Key { t: 1.0, v: Value::Quat(b.to_array()), interp: Interp::Spline },
+            Key {
+                t: 0.0,
+                v: Value::Quat(a.to_array()),
+                interp: Interp::Spline,
+            },
+            Key {
+                t: 1.0,
+                v: Value::Quat(b.to_array()),
+                interp: Interp::Spline,
+            },
         ]);
-        let Some(Value::Quat(mid)) = c.eval(0.5) else { panic!() };
+        let Some(Value::Quat(mid)) = c.eval(0.5) else {
+            panic!()
+        };
         let want = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4).to_array();
         for axis in 0..4 {
             assert!((mid[axis] - want[axis]).abs() < 1e-4, "{mid:?} vs {want:?}");
@@ -291,14 +337,20 @@ mod tests {
 
     #[test]
     fn holds_before_and_after() {
-        let c = chan(vec![k(0.0, 1.0, Interp::Linear), k(2.0, 3.0, Interp::Linear)]);
+        let c = chan(vec![
+            k(0.0, 1.0, Interp::Linear),
+            k(2.0, 3.0, Interp::Linear),
+        ]);
         assert_eq!(c.eval(-1.0), Some(Value::F32(1.0)));
         assert_eq!(c.eval(5.0), Some(Value::F32(3.0)));
     }
 
     #[test]
     fn linear_midpoint() {
-        let c = chan(vec![k(0.0, 0.0, Interp::Linear), k(2.0, 4.0, Interp::Linear)]);
+        let c = chan(vec![
+            k(0.0, 0.0, Interp::Linear),
+            k(2.0, 4.0, Interp::Linear),
+        ]);
         assert_eq!(c.eval(1.0), Some(Value::F32(2.0)));
     }
 
@@ -312,7 +364,14 @@ mod tests {
     #[test]
     fn bezier_is_monotonic_and_bounded() {
         let c = chan(vec![
-            k(0.0, 0.0, Interp::Bezier { out: [0.8, 0.0], in_: [0.2, 1.0] }),
+            k(
+                0.0,
+                0.0,
+                Interp::Bezier {
+                    out: [0.8, 0.0],
+                    in_: [0.2, 1.0],
+                },
+            ),
             k(1.0, 1.0, Interp::Linear),
         ]);
         let mut prev = -1.0;
@@ -329,10 +388,20 @@ mod tests {
 
     #[test]
     fn quat_slerp_stays_unit() {
-        let a = Key { t: 0.0, v: Value::Quat(Quat::from_rotation_y(0.0).to_array()), interp: Interp::Linear };
-        let b = Key { t: 1.0, v: Value::Quat(Quat::from_rotation_y(1.5).to_array()), interp: Interp::Linear };
+        let a = Key {
+            t: 0.0,
+            v: Value::Quat(Quat::from_rotation_y(0.0).to_array()),
+            interp: Interp::Linear,
+        };
+        let b = Key {
+            t: 1.0,
+            v: Value::Quat(Quat::from_rotation_y(1.5).to_array()),
+            interp: Interp::Linear,
+        };
         let c = chan(vec![a, b]);
-        let Value::Quat(q) = c.eval(0.5).unwrap() else { panic!() };
+        let Value::Quat(q) = c.eval(0.5).unwrap() else {
+            panic!()
+        };
         assert!((Quat::from_array(q).length() - 1.0).abs() < 1e-5);
     }
 
