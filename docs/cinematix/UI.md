@@ -3,10 +3,11 @@
 The editor is an in-game screen drawn with Horizon's UI kit. This document maps the BBS-FS
 interaction model onto the widgets that actually exist, and states what must be written.
 
-[BBS-FS](https://github.com/Wemppy4/bbs-fs) is a behavioural reference only. It is Java against
-OpenGL, and the UI it uses lives in McLib (`mchorse/mclib`), whose GitHub licence reads
-`NOASSERTION`. Nothing is copied; the layout, the widget vocabulary and the interaction rules are
-reimplemented against Horizon's kit.
+[BBS-FS](https://github.com/Wemppy4/bbs-fs) is the visual and behavioural reference. Both it and
+McLib (`mchorse/mclib`) are MIT licensed; the icon sheet is copied with the notice in
+[ATTRIBUTION.md](ATTRIBUTION.md), and the Rust editor reuses the layout, colours and interaction
+rules (the Java itself is not compiled or shipped). See `ui/dashboard` and `ui/utils/icons` on the
+`dev` branch for the reference the current work follows.
 
 ## 1. What Horizon already gives us
 

@@ -1407,7 +1407,10 @@ impl HudAtlas {
         }
         // The controller's art, unless a pack brought its own (walked above, as a mod's GUI
         // textures are).
-        for image in crate::pad_glyph::images().chain(crate::mark_sprite::image()) {
+        for image in crate::pad_glyph::images()
+            .chain(crate::mark_sprite::image())
+            .chain(crate::cinematix_icons::image())
+        {
             if !images.iter().any(|i| i.0 == image.0) {
                 images.push(image);
             }

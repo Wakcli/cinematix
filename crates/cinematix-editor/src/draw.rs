@@ -1,22 +1,26 @@
 use crate::document::{kind_key, prop_key};
-use crate::editor::{Editor, Field, Section};
+use crate::editor::{Button, Editor, Field, Section};
 use crate::frame::{Frame, GUTTER_W, Row};
+use crate::glyphs::{self, Icon};
 use cinematix_scene::NodeKind;
 use cinematix_ui::Rect;
 use horizon_client_render::hud::{HudAtlas, HudBatch, rgba};
 use horizon_client_render::text::Text;
 use horizon_client_render::ui;
+use horizon_client_render::widgets::{self, Kind};
 
-const HEADER_BG: u32 = rgba(14, 15, 18, 240);
-const RAIL_BG: u32 = rgba(19, 20, 24, 240);
-const PANEL_BG: u32 = rgba(22, 23, 28, 232);
-const ROW_ALT: u32 = rgba(28, 29, 35, 200);
-const LINE: u32 = rgba(56, 60, 72, 255);
-const TEXT: u32 = rgba(226, 228, 234, 255);
-const DIM: u32 = rgba(139, 143, 156, 255);
-const FAINT: u32 = rgba(96, 100, 112, 255);
+const HEADER_BG: u32 = rgba(13, 13, 13, 255);
+const RAIL_BG: u32 = rgba(17, 17, 17, 255);
+const PANEL_BG: u32 = rgba(22, 22, 22, 245);
+const ROW_ALT: u32 = rgba(27, 27, 27, 220);
+const LINE: u32 = rgba(46, 46, 46, 255);
+const TEXT: u32 = rgba(230, 230, 230, 255);
+const DIM: u32 = rgba(154, 154, 154, 255);
+const FAINT: u32 = rgba(106, 106, 106, 255);
 const ACCENT: u32 = rgba(92, 156, 255, 255);
 const KEY: u32 = rgba(245, 246, 250, 255);
+const HOVER: u32 = rgba(43, 43, 43, 255);
+const ACTIVE: u32 = rgba(56, 56, 56, 255);
 
 fn fill(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, colour: u32) {
     if r.w <= 0.0 || r.h <= 0.0 {
@@ -38,17 +42,48 @@ fn right_text(batch: &mut HudBatch, atlas: &HudAtlas, right: f32, y: f32, t: &Te
     text(batch, atlas, right - w, y, t, colour);
 }
 
-fn button(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, label: &Text, cursor: (f32, f32)) {
+fn register(label: &Text, r: Rect) {
+    widgets::record_as(&label.plain(), [r.x, r.y, r.w, r.h], true, Kind::Button);
+}
+
+/// A flat BBS-style icon button: a hover/active wash, the glyph centred, registered with the
+/// control socket so `horizon-ctl ui` and the narrator still see it.
+fn icon_button(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    r: Rect,
+    icon: Icon,
+    label: &Text,
+    cursor: (f32, f32),
+    active: bool,
+) {
     let hover = r.contains(cursor.0, cursor.1);
-    ui::button(batch, atlas, r.x, r.y, r.w, r.h, label, true, hover);
+    if active {
+        fill(batch, atlas, r, ACTIVE);
+    } else if hover {
+        fill(batch, atlas, r, HOVER);
+    }
+    let size = 16.0;
+    icon.draw(
+        batch,
+        atlas,
+        r.x + (r.w - size) * 0.5,
+        r.y + (r.h - size) * 0.5,
+        size,
+        TEXT,
+    );
+    register(label, r);
 }
 
 pub fn draw(ed: &Editor, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
     let f = ed.frame();
     draw_header(ed, &f, batch, atlas);
-    draw_rail(ed, &f, batch, atlas, cursor);
+    let hovered = draw_rail(ed, &f, batch, atlas, cursor);
     draw_inspector(ed, &f, batch, atlas, cursor);
     draw_timeline(ed, &f, batch, atlas, cursor);
+    if let Some(section) = hovered {
+        ui::tooltip(batch, atlas, &[Text::translate(section.key(), &[])], cursor);
+    }
 }
 
 fn draw_header(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
@@ -91,7 +126,26 @@ fn draw_header(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
     }
 }
 
-fn draw_rail(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+fn section_icon(section: Section) -> Icon {
+    match section {
+        Section::Camera => glyphs::CAMERA,
+        Section::Actors => glyphs::USER,
+        Section::Models => glyphs::SHAPES,
+        Section::Lights => glyphs::LIGHT,
+        Section::World => glyphs::BRICKS,
+        Section::Film => glyphs::FILM,
+        Section::Render => glyphs::VIDEO_CAMERA,
+        Section::Project => glyphs::SETTINGS,
+    }
+}
+
+fn draw_rail(
+    ed: &Editor,
+    f: &Frame,
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+) -> Option<Section> {
     fill(batch, atlas, f.rail, RAIL_BG);
     batch.fill(
         atlas,
@@ -101,13 +155,23 @@ fn draw_rail(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas, cur
         f.rail.h,
         LINE,
     );
+    let mut hovered = None;
     for (section, r) in &f.rail_items {
-        let label = Text::translate(section.short_key(), &[]);
-        button(batch, atlas, *r, &label, cursor);
-        if ed.section == *section {
-            batch.fill(atlas, r.x - 2.0, r.y + 3.0, 2.0, r.h - 6.0, ACCENT);
+        let label = Text::translate(section.key(), &[]);
+        icon_button(
+            batch,
+            atlas,
+            *r,
+            section_icon(*section),
+            &label,
+            cursor,
+            ed.section == *section,
+        );
+        if r.contains(cursor.0, cursor.1) {
+            hovered = Some(*section);
         }
     }
+    hovered
 }
 
 fn draw_inspector(
@@ -444,6 +508,33 @@ fn draw_playhead(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas)
     );
 }
 
+fn button_icon(b: Button, playing: bool) -> Option<Icon> {
+    match b {
+        Button::PlayPause if playing => Some(glyphs::PAUSE),
+        Button::PlayPause => Some(glyphs::PLAY),
+        Button::StepPrev => Some(glyphs::FRAME_PREV),
+        Button::StepNext => Some(glyphs::FRAME_NEXT),
+        Button::AddKey => Some(glyphs::ADD),
+        Button::DeleteKey => Some(glyphs::REMOVE),
+        Button::Fit => Some(glyphs::MAXIMIZE),
+        Button::ZoomIn | Button::ZoomOut => None,
+    }
+}
+
+fn button_key(b: Button, playing: bool) -> &'static str {
+    match b {
+        Button::PlayPause if playing => "cinematix.action.pause",
+        Button::PlayPause => "cinematix.action.play",
+        Button::StepPrev => "cinematix.action.step_back",
+        Button::StepNext => "cinematix.action.step_forward",
+        Button::AddKey => "cinematix.action.add_key",
+        Button::DeleteKey => "cinematix.action.delete_key",
+        Button::ZoomIn => "cinematix.action.zoom_in",
+        Button::ZoomOut => "cinematix.action.zoom_out",
+        Button::Fit => "cinematix.action.fit",
+    }
+}
+
 fn draw_transport(
     ed: &Editor,
     f: &Frame,
@@ -460,8 +551,37 @@ fn draw_transport(
         LINE,
     );
     for (b, r) in &f.buttons {
-        let label = Text::literal(b.face(ed.playing));
-        button(batch, atlas, *r, &label, cursor);
+        let label = Text::translate(button_key(*b, ed.playing), &[]);
+        let hover = r.contains(cursor.0, cursor.1);
+        if hover {
+            fill(batch, atlas, *r, HOVER);
+        }
+        match button_icon(*b, ed.playing) {
+            Some(icon) => icon.draw(
+                batch,
+                atlas,
+                r.x + (r.w - 16.0) * 0.5,
+                r.y + (r.h - 16.0) * 0.5,
+                16.0,
+                TEXT,
+            ),
+            None => {
+                let face = match *b {
+                    Button::ZoomIn => "+",
+                    Button::ZoomOut => "-",
+                    _ => "",
+                };
+                text(
+                    batch,
+                    atlas,
+                    r.x + r.w * 0.5 - 2.0,
+                    r.y + 5.0,
+                    &Text::literal(face),
+                    TEXT,
+                );
+            }
+        }
+        register(&label, *r);
     }
     let last = f
         .buttons

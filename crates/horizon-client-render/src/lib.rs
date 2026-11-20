@@ -71,6 +71,7 @@ pub mod keypad;
 pub mod terrain_model;
 pub use horizon_polytone::creative_tabs as polytone_creative_tabs;
 pub use horizon_world::json_folder;
+pub mod cinematix_icons;
 pub mod dimension_transition;
 pub mod fluid_models;
 pub mod level_loading;

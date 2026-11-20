@@ -1401,5 +1401,14 @@
   "horizon.cinematix.render_done": "Rendered %s frames into %s.",
   "horizon.cinematix.render_error": "Render failed: %s",
   "horizon.cinematix.world_changed": "World layer updated: %s blocks active.",
-  "horizon.cinematix.world_cleared": "World layer cleared."
+  "horizon.cinematix.world_cleared": "World layer cleared.",
+  "cinematix.action.play": "Play",
+  "cinematix.action.pause": "Pause",
+  "cinematix.action.step_back": "Previous frame",
+  "cinematix.action.step_forward": "Next frame",
+  "cinematix.action.add_key": "Add key",
+  "cinematix.action.delete_key": "Delete key",
+  "cinematix.action.zoom_in": "Zoom in",
+  "cinematix.action.zoom_out": "Zoom out",
+  "cinematix.action.fit": "Fit film"
 }

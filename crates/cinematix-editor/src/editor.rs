@@ -103,21 +103,6 @@ impl Button {
             _ => 24.0,
         }
     }
-
-    /// The face of the button: a symbol, not a word, so it needs no translation.
-    pub fn face(self, playing: bool) -> &'static str {
-        match self {
-            Button::PlayPause if playing => "II",
-            Button::PlayPause => ">",
-            Button::StepPrev => "<",
-            Button::StepNext => ">",
-            Button::AddKey => "K",
-            Button::DeleteKey => "X",
-            Button::ZoomIn => "+",
-            Button::ZoomOut => "-",
-            Button::Fit => "F",
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

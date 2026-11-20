@@ -37,6 +37,9 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 | `crates/horizon-client/src/game/runtime/core_tests.rs` | the screen-id list and its uniqueness test | +1 |
 | `crates/horizon-client/src/game/runtime/screenshot_sequence.rs` | the stillness helper shared with `cinematix render`, with named causes | +61 −34 |
 | `crates/horizon-client-render/src/gfx.rs` | `Renderer::offscreen()` | +6 |
+| `crates/horizon-client-render/src/hud.rs` | the BBS icon sheet in the HUD atlas | +4 −1 |
+| `crates/horizon-client-render/src/lib.rs` | `cinematix_icons` module | +1 |
+| `crates/horizon-client/assets/horizon/textures/gui/cinematix/icons.png` | BBS icon sheet (MIT, notice beside it) | new file |
 | `crates/horizon-client-render/src/mesher.rs` | `Overrides`, the mesher field, the padded-volume application and its tests | +102 −1 |
 | `crates/horizon-client-render/src/streaming.rs` | `Streaming::set_overrides`, the field and `MeshSettings` | +10 |
 | `crates/horizon-client-render/src/streaming/mesh_job.rs` | hands the overrides to the mesher | +2 |

@@ -27,7 +27,7 @@ restoring everything.
 |---|---|
 | `cinematix-editor` crate, `Screen` variant, key binding | done — 25 tests; `Screen::Cinematix`, F8, `/cinematix` |
 | Editor lifecycle: open, close, cursor, input restoration | done — `game/interface/cinematix.rs`; verified headless |
-| Icon rail | done — eight sections, drawn and hit-tested |
+| Icon rail | done — eight sections with BBS mod's icon sheet (MIT, [ATTRIBUTION](ATTRIBUTION.md)); flat hover/active, tooltips, registered |
 | Dock tree and panel widget | partial — dock logic exists in `cinematix-ui`; the inspector is a fixed column, not dockable |
 | Overlay card, context menu | todo |
 | Numeric scrubber | done — drawn with a track; drag with Shift ×10 and Ctrl ÷10 |

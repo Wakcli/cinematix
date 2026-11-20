@@ -7,6 +7,7 @@ mod draw;
 mod editor;
 mod film;
 mod frame;
+pub mod icons;
 
 pub use cinematix_anim::{Interp, Prop};
 pub use cinematix_scene::{BlockChange, BlockPos, BlockState as FilmBlock};
@@ -19,3 +20,4 @@ pub use draw::draw;
 pub use editor::{Button, Editor, EditorKey, Field, KeyResult, Section, fields_for};
 pub use film::{EXTENSION, FORMAT_VERSION, Stamp, load, save};
 pub use frame::{Frame, GUTTER_W, ROW_H};
+pub use icons as glyphs;
