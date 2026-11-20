@@ -206,6 +206,15 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
     literal(&mut d, root, "new");
     let camera = literal(&mut d, root, "camera");
     literal(&mut d, camera, "player");
+    let pose = literal(&mut d, camera, "pose");
+    argument(&mut d, pose, "values", ArgType::Greedy);
+    let interp = literal(&mut d, root, "interp");
+    argument(
+        &mut d,
+        interp,
+        "mode",
+        ArgType::StrEnum(&["step", "linear", "smooth", "spline"], "argument.enum.invalid"),
+    );
     let section = literal(&mut d, root, "section");
     argument(
         &mut d,

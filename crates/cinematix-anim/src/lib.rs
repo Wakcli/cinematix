@@ -63,6 +63,9 @@ pub enum Interp {
     Step,
     Linear,
     Smooth,
+    /// Uniform Catmull-Rom through the neighbouring keys, the curve Studio's camera path uses.
+    /// Positional values bend through their keys instead of easing on each axis.
+    Spline,
     Bezier { out: [f32; 2], in_: [f32; 2] },
 }
 
@@ -104,18 +107,82 @@ impl Channel {
         let b = &self.keys[i];
         let span = b.t - a.t;
         let u = if span <= f64::EPSILON { 1.0 } else { ((t - a.t) / span) as f32 };
-        Some(blend(a, b, u))
+        Some(blend(&self.keys, i, u))
     }
 }
 
-fn blend(a: &Key, b: &Key, u: f32) -> Value {
+fn blend(keys: &[Key], i: usize, u: f32) -> Value {
+    let a = &keys[i - 1];
+    let b = &keys[i];
     let u = match a.interp {
         Interp::Step => 0.0,
         Interp::Linear => u,
         Interp::Smooth => u * u * (3.0 - 2.0 * u),
+        Interp::Spline => return spline(keys, i, u),
         Interp::Bezier { out, in_ } => bezier(out, in_, u),
     };
     a.v.lerp(b.v, u)
+}
+
+/// Catmull-Rom through `a` and `b`, with the neighbouring keys as tangents. The end segments
+/// extrapolate a virtual neighbour (`p1 - (p2 - p1)`), the same choice Studio's camera track
+/// makes, so a two-key film is a straight line and a third key bends it.
+fn spline(keys: &[Key], i: usize, u: f32) -> Value {
+    let a = &keys[i - 1].v;
+    let b = &keys[i].v;
+    let p0 = if i >= 2 {
+        keys[i - 2].v
+    } else {
+        extrapolate(*a, *b, true)
+    };
+    let p3 = if i + 1 < keys.len() {
+        keys[i + 1].v
+    } else {
+        extrapolate(*a, *b, false)
+    };
+    let catmull = |p0: f32, p1: f32, p2: f32, p3: f32| {
+        let t2 = u * u;
+        let t3 = t2 * u;
+        0.5 * ((2.0 * p1)
+            + (-p0 + p2) * u
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+    };
+    match (p0, *a, *b, p3) {
+        (Value::F32(p0), Value::F32(p1), Value::F32(p2), Value::F32(p3)) => {
+            Value::F32(catmull(p0, p1, p2, p3))
+        }
+        (Value::Vec3(p0), Value::Vec3(p1), Value::Vec3(p2), Value::Vec3(p3)) => Value::Vec3([
+            catmull(p0[0], p1[0], p2[0], p3[0]),
+            catmull(p0[1], p1[1], p2[1], p3[1]),
+            catmull(p0[2], p1[2], p2[2], p3[2]),
+        ]),
+        (Value::Color(p0), Value::Color(p1), Value::Color(p2), Value::Color(p3)) => Value::Color([
+            catmull(p0[0], p1[0], p2[0], p3[0]),
+            catmull(p0[1], p1[1], p2[1], p3[1]),
+            catmull(p0[2], p1[2], p2[2], p3[2]),
+            catmull(p0[3], p1[3], p2[3], p3[3]),
+        ]),
+        // Rotations have no meaningful Catmull-Rom; they slerp, as Studio's track does.
+        _ => a.lerp(*b, u),
+    }
+}
+
+fn extrapolate(a: Value, b: Value, backwards: bool) -> Value {
+    let f = |a: f32, b: f32| if backwards { a - (b - a) } else { b + (b - a) };
+    match (a, b) {
+        (Value::F32(a), Value::F32(b)) => Value::F32(f(a, b)),
+        (Value::Vec3(a), Value::Vec3(b)) => {
+            Value::Vec3([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2])])
+        }
+        (Value::Color(a), Value::Color(b)) => Value::Color([
+            f(a[0], b[0]),
+            f(a[1], b[1]),
+            f(a[2], b[2]),
+            f(a[3], b[3]),
+        ]),
+        (a, _) => a,
+    }
 }
 
 fn bezier(out: [f32; 2], in_: [f32; 2], t: f32) -> f32 {
@@ -161,6 +228,65 @@ mod tests {
 
     fn k(t: f64, v: f32, interp: Interp) -> Key {
         Key { t, v: Value::F32(v), interp }
+    }
+
+    fn v3(t: f64, x: f32, y: f32, z: f32, interp: Interp) -> Key {
+        Key { t, v: Value::Vec3([x, y, z]), interp }
+    }
+
+    #[test]
+    fn a_spline_passes_through_every_key() {
+        let c = chan(vec![
+            v3(0.0, 0.0, 64.0, 0.0, Interp::Spline),
+            v3(1.0, 4.0, 66.0, 2.0, Interp::Spline),
+            v3(2.0, 8.0, 64.0, 8.0, Interp::Spline),
+        ]);
+        for (t, want) in [(0.0, [0.0, 64.0, 0.0]), (1.0, [4.0, 66.0, 2.0]), (2.0, [8.0, 64.0, 8.0])] {
+            let Some(Value::Vec3(got)) = c.eval(t) else { panic!("no value at {t}") };
+            for axis in 0..3 {
+                assert!((got[axis] - want[axis]).abs() < 1e-4, "t={t} axis={axis}: {got:?}");
+            }
+            assert!((c.eval(t).unwrap().lerp(Value::Vec3(want), 0.0) == Value::Vec3(want)));
+        }
+    }
+
+    #[test]
+    fn a_spline_bends_between_uneven_keys_where_a_straight_line_would_not() {
+        let c = chan(vec![
+            v3(0.0, 0.0, 64.0, 0.0, Interp::Spline),
+            v3(1.0, 1.0, 64.0, 0.0, Interp::Spline),
+            v3(2.0, 1.0, 64.0, 1.0, Interp::Spline),
+        ]);
+        let Some(Value::Vec3(mid)) = c.eval(0.5) else { panic!() };
+        assert!(mid[0] > 0.5, "x should overshoot the chord: {mid:?}");
+        assert!(mid[2] < 0.0, "z should dip below the first key: {mid:?}");
+    }
+
+    #[test]
+    fn a_two_key_spline_is_the_straight_segment() {
+        let c = chan(vec![
+            v3(0.0, 0.0, 64.0, 0.0, Interp::Spline),
+            v3(2.0, 10.0, 70.0, -4.0, Interp::Spline),
+        ]);
+        let Some(Value::Vec3(mid)) = c.eval(1.0) else { panic!() };
+        assert!((mid[0] - 5.0).abs() < 1e-4, "{mid:?}");
+        assert!((mid[1] - 67.0).abs() < 1e-4, "{mid:?}");
+        assert!((mid[2] + 2.0).abs() < 1e-4, "{mid:?}");
+    }
+
+    #[test]
+    fn spline_rotation_keys_still_slerp() {
+        let a = Quat::from_rotation_y(0.0);
+        let b = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let c = chan(vec![
+            Key { t: 0.0, v: Value::Quat(a.to_array()), interp: Interp::Spline },
+            Key { t: 1.0, v: Value::Quat(b.to_array()), interp: Interp::Spline },
+        ]);
+        let Some(Value::Quat(mid)) = c.eval(0.5) else { panic!() };
+        let want = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4).to_array();
+        for axis in 0..4 {
+            assert!((mid[axis] - want[axis]).abs() < 1e-4, "{mid:?} vs {want:?}");
+        }
     }
 
     #[test]

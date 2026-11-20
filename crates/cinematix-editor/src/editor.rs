@@ -1,6 +1,6 @@
 use crate::document::Document;
 use crate::frame::Frame;
-use cinematix_anim::{Prop, Value};
+use cinematix_anim::{Interp, Prop, Value};
 use cinematix_timeline::{Playhead, Snap, snap_t};
 use cinematix_ui::Mods;
 use glam::{Quat, Vec3};
@@ -422,6 +422,27 @@ impl Editor {
         }
     }
 
+    /// Sets the selected key's outgoing interpolation. The key decides the segment after it, so a
+    /// spline key bends toward the next key and a step key holds until it.
+    pub fn set_selected_interp(&mut self, interp: Interp) -> bool {
+        let Some((ci, ki)) = self.selected_key else {
+            return false;
+        };
+        match self
+            .doc
+            .channels
+            .get_mut(ci)
+            .and_then(|c| c.keys.get_mut(ki))
+        {
+            Some(key) => {
+                key.interp = interp;
+                self.status = Some("cinematix.status.interp");
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn delete_key(&mut self) -> bool {
         let Some((ci, ki)) = self.selected_key else {
             return false;
@@ -784,6 +805,26 @@ impl Editor {
         }
     }
 
+    /// Sets the camera's field of view: a keyed FOV channel gets a key at the playhead, an
+    /// unkeyed one changes the camera's rest data.
+    pub fn set_fov(&mut self, fov: f32) -> bool {
+        let id = self.doc.scene.camera;
+        let t = self.playhead.t;
+        let fov = fov.clamp(1.0, 179.0);
+        match self.doc.channel_index(id, Prop::Fov) {
+            Some(ci) if !self.doc.channels[ci].keys.is_empty() => {
+                self.doc.upsert_key(ci, t, Value::F32(fov)).is_some()
+            }
+            _ => match self.doc.camera_data_mut() {
+                Some(camera) => {
+                    camera.fov_deg = fov;
+                    true
+                }
+                None => false,
+            },
+        }
+    }
+
     /// The camera's pose, for the status reply.
     pub fn camera_status(&self) -> Option<([f32; 3], f32, f32, f32)> {
         let (position, rotation) = self.camera_at(self.playhead.t)?;
@@ -1141,6 +1182,50 @@ mod tests {
         e.seek(1.0);
         assert_eq!(e.doc.channels[ci].keys.len(), 2);
         assert!((e.preview_fov() - 45.0).abs() < 1.0, "{}", e.preview_fov());
+    }
+
+    #[test]
+    fn new_translation_keys_spline_and_rotation_keys_smooth() {
+        let mut e = editor();
+        let ti = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        let ri = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Rotation)
+            .unwrap();
+        e.doc.insert_key(ti, 0.0).unwrap();
+        e.doc.insert_key(ri, 0.0).unwrap();
+        assert_eq!(e.doc.channels[ti].keys[0].interp, Interp::Spline);
+        assert_eq!(e.doc.channels[ri].keys[0].interp, Interp::Smooth);
+    }
+
+    #[test]
+    fn changing_a_keys_interpolation_changes_what_the_channel_evaluates() {
+        let mut e = editor();
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        e.selected_channel = Some(ci);
+        e.seek_frame(0);
+        e.add_key();
+        e.doc.channels[ci].keys[0].v = Value::Vec3([0.0, 0.0, 0.0]);
+        e.seek_frame(24);
+        e.add_key();
+        e.doc.channels[ci].keys[1].v = Value::Vec3([10.0, 0.0, 0.0]);
+        e.selected_key = Some((ci, 0));
+        assert!(e.set_selected_interp(Interp::Step));
+        let Some(Value::Vec3(step)) = e.doc.channels[ci].eval(0.5) else {
+            panic!()
+        };
+        assert!((step[0] - 0.0).abs() < 1e-5, "{step:?}");
+        assert!(e.set_selected_interp(Interp::Spline));
+        let Some(Value::Vec3(spline)) = e.doc.channels[ci].eval(0.5) else {
+            panic!()
+        };
+        assert!((spline[0] - 5.0).abs() < 1e-4, "{spline:?}");
     }
 
     #[test]

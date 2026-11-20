@@ -91,6 +91,16 @@ pub fn key_light_data() -> LightData {
     }
 }
 
+/// The interpolation a new key gets. A camera or node's position bends through its keys like
+/// Studio's camera path; every other property eases (`Smooth`), which is the predictable choice
+/// for a single number.
+pub fn default_interp(prop: Prop) -> Interp {
+    match prop {
+        Prop::Translation => Interp::Spline,
+        _ => Interp::Smooth,
+    }
+}
+
 pub fn rest_value(node: &Node, prop: Prop) -> Option<Value> {
     match prop {
         Prop::Translation => Some(Value::Vec3(node.rest.translation.to_array())),
@@ -217,9 +227,11 @@ impl Document {
         rest_value(node, ch.target.prop)
     }
 
-    /// Writes `value` at `t`, replacing a key within a frame's epsilon. Returns its index.
+    /// Writes `value` at `t`, replacing a key within a frame's epsilon. A new key takes the
+    /// channel's default interpolation; a replaced one keeps the interpolation it had.
     pub fn upsert_key(&mut self, ci: usize, t: f64, value: Value) -> Option<usize> {
         let ch = self.channels.get_mut(ci)?;
+        let interp = default_interp(ch.target.prop);
         if let Some(i) = ch.keys.iter().position(|k| (k.t - t).abs() < 1e-9) {
             ch.keys[i].v = value;
             return Some(i);
@@ -227,7 +239,7 @@ impl Document {
         ch.keys.push(Key {
             t,
             v: value,
-            interp: Interp::Smooth,
+            interp,
         });
         ch.sort();
         ch.keys.iter().position(|k| (k.t - t).abs() < 1e-9)
@@ -238,6 +250,7 @@ impl Document {
     pub fn insert_key(&mut self, ci: usize, t: f64) -> Option<usize> {
         let value = self.value_at(ci, t)?;
         let ch = self.channels.get_mut(ci)?;
+        let interp = default_interp(ch.target.prop);
         if let Some(i) = ch.keys.iter().position(|k| (k.t - t).abs() < 1e-9) {
             ch.keys[i].v = value;
             return Some(i);
@@ -245,7 +258,7 @@ impl Document {
         ch.keys.push(Key {
             t,
             v: value,
-            interp: Interp::Smooth,
+            interp,
         });
         ch.sort();
         ch.keys.iter().position(|k| (k.t - t).abs() < 1e-9)

@@ -8,9 +8,11 @@ mod editor;
 mod film;
 mod frame;
 
+pub use cinematix_anim::Interp;
 pub use cinematix_ui::{Mods, Rect};
 pub use document::{
-    Document, camera_data, key_light_data, kind_key, new_node, prop_key, props_of, rest_value,
+    Document, camera_data, default_interp, key_light_data, kind_key, new_node, prop_key, props_of,
+    rest_value,
 };
 pub use draw::draw;
 pub use editor::{Button, Editor, EditorKey, Field, KeyResult, Section, fields_for};

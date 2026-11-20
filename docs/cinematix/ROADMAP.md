@@ -50,6 +50,12 @@ eye (`-4.5 66.615 6.5`, yaw 0, pitch 0, fov 70); holding W for one second moved 
 the registered slider and `cinematix status` then reported fov 90, with the screenshot visibly
 wider. The player's eye, yaw and pitch were identical before and after the session.
 
+Spline keys, verified headless: camera keys at frames 0/48/96 at (0,64,0), (10,64,0), (10,64,10);
+scrubbing reported exactly those poses at the keys, (5.625, 64, -0.625) at frame 24 and
+(10.625, 64, 4.375) at frame 72, the values the Catmull-Rom formula gives (a straight line would be
+(5,64,0) and (10,64,5)). Playing for about a second advanced to frame 24 with the camera at
+(5.719, 64, -0.635); `pause` stopped it.
+
 Film file, verified headless across two game processes: `cinematix save /tmp/session.cmx` wrote a
 918-byte zip (`project.toml` format 1, `app_version 0.1.0`, `scene.json` with 10 channels and one
 key); a second world loaded it, reported one key and the camera at the saved pose
@@ -62,15 +68,17 @@ path wrote to `<player dir>/cinematix/film.cmx`.
 
 | Item | Status |
 |---|---|
-| Channels, keys, interpolation, pure evaluation | done — `cinematix-anim`, 6 tests |
+| Channels, keys, interpolation, pure evaluation | done — `cinematix-anim`, 10 tests |
 | Time axis, zoom, pan, snapping, hit testing | done — `cinematix-timeline`, 9 tests |
-| Dope sheet, read-only | todo |
-| Editing commands and undo | todo |
+| Dope sheet editing | done — rows, keys, selection, drag in time, add/delete, per-key interpolation |
+| Editing commands and undo | partial — add/delete/move/interp exist; undo does not |
 | Curve editor with Bezier handles | todo |
 
-`clamp`/`Step`/`Linear`/`Smooth`/`Bezier` and quaternion slerp are implemented and tested. Cubic and
-Hermite interpolation from the specification are **not** yet implemented as distinct modes; the
-current set covers the practical cases and adding modes is a small, tested change to `cinematix-anim`.
+`Step`/`Linear`/`Smooth`/`Spline`/`Bezier` and quaternion slerp are implemented and tested.
+`Spline` is Catmull-Rom through the neighbouring keys, the same formula Studio's camera track uses
+(`crates/horizon-client/src/studio/spline.rs`): the film camera's position therefore follows a curve
+through its keys, not three independent eased axes. Cubic and Hermite as *distinct* modes are still
+absent; `Smooth` and `Bezier` cover the practical cases.
 
 ## Phase 4 — scene and camera
 

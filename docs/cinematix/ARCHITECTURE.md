@@ -133,7 +133,7 @@ Node  { id, name, parent, children, rest: Transform, kind, visible, locked }
 NodeKind { Empty | Camera | Light | Actor | Mesh }
 Channel { target: PropPath, keys: Vec<Key>, muted }
 Key     { t: f64, v: Value, interp }
-Interp  { Step | Linear | Smooth | Bezier { out, in_ } }
+Interp  { Step | Linear | Smooth | Spline | Bezier { out, in_ } }
 Value   { F32 | Vec3 | Quat | Color | Bool }
 ```
 
@@ -145,6 +145,12 @@ Design points that survive review:
   the boundary using Horizon's YXZ convention.
 - Keys are sorted; lookup is binary search. Missing channels fall back to rest state; muted channels
   are ignored entirely.
+- A key's `interp` shapes the segment *after* it. `Spline` is the uniform Catmull-Rom Studio's
+  camera track already used: the two neighbouring keys are the tangents, and an end segment
+  extrapolates a virtual neighbour (`p1 - (p2 - p1)` on the first segment, `p2 + (p2 - p1)` on the
+  last), so two keys give a straight line and a third bends it. Positions, scales and colours spline
+  per component; rotations always slerp. New translation keys default to `Spline`; every other
+  property defaults to `Smooth` (`cinematix_editor::default_interp`).
 - `WorldDeltaLayer` is an ordered op list indexed by block position, with an optional activation
   time, so a wall can collapse on the timeline and the save is never touched.
 

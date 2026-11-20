@@ -16,7 +16,7 @@ use std::path::Path;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 pub const EXTENSION: &str = "cmx";
-pub const FORMAT_VERSION: i64 = 1;
+pub const FORMAT_VERSION: i64 = 2;
 const PROJECT: &str = "project.toml";
 const SCENE: &str = "scene.json";
 
@@ -64,7 +64,9 @@ fn read_entry(archive: &mut ZipArchive<File>, name: &str) -> Result<String, Stri
     Ok(text)
 }
 
-/// A project version newer than this build understands is refused, not partially read.
+/// A project version newer than this build understands is refused, not partially read. Version 1
+/// films load unchanged: version 2 only added the `Spline` interpolation key, which a version 1
+/// file cannot contain, so the upcast is "nothing to rewrite".
 fn upgrade(version: i64) -> Result<(), String> {
     if version > FORMAT_VERSION {
         return Err(format!(
@@ -230,6 +232,37 @@ mod tests {
             );
         }
         assert!((b.preview_fov() - 35.0).abs() < 0.01);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_version_one_film_loads_and_saves_as_version_two() {
+        let path = temp_path();
+        let doc = animated();
+        // Write the file the version 1 build wrote: same entries, format_version 1.
+        let file = File::create(&path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zip.start_file(PROJECT, options).unwrap();
+        zip.write_all(
+            b"format_version = 1\napp = \"cinematix\"\napp_version = \"0.1.0\"\nsaved_unix = 0\n",
+        )
+        .unwrap();
+        zip.start_file(SCENE, options).unwrap();
+        let scene = SceneFile {
+            scene: doc.scene.clone(),
+            channels: doc.channels.clone(),
+        };
+        zip.write_all(&serde_json::to_vec(&scene).unwrap()).unwrap();
+        zip.finish().unwrap();
+
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.key_count(), 4);
+
+        save(&path, &loaded, Stamp::default()).unwrap();
+        let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let project = read_entry(&mut archive, PROJECT).unwrap();
+        assert!(project.contains("format_version = 2"), "{project}");
         std::fs::remove_file(&path).ok();
     }
 

@@ -4,7 +4,7 @@
 //! the game's screen, pointer and key dispatch.
 
 use super::{Game, HudBatch, Screen};
-use cinematix_editor::{EditorKey, KeyResult, Mods, Section};
+use cinematix_editor::{EditorKey, Interp, KeyResult, Mods, Section};
 use glam::Vec3;
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
@@ -24,6 +24,8 @@ pub const HELP: &[&str] = &[
     "cinematix section NAME         switch the inspector (camera, actors, models, lights, world,",
     "                               film, render, project)",
     "cinematix camera player        set the film camera to the player's eye and view angles",
+    "cinematix camera pose X Y Z YAW PITCH [FOV]   place the film camera numerically",
+    "cinematix interp step|linear|smooth|spline   set the selected key's interpolation",
     "cinematix save [PATH]          write the film as .cmx (default: <game dir>/cinematix/film.cmx)",
     "cinematix load PATH            replace the film with a .cmx",
     "cinematix new                  start an empty film",
@@ -269,6 +271,8 @@ impl Game<'_> {
                 "save" => "horizon.cinematix.saved",
                 "load" => "horizon.cinematix.loaded",
                 "new" => "horizon.cinematix.new",
+                "interp" => "horizon.cinematix.interp",
+                "camera" if words.get(1) == Some(&"pose") => "horizon.cinematix.pose",
                 _ => "horizon.cinematix.status",
             };
             let detail = match (words[0], key) {
@@ -438,8 +442,49 @@ impl Game<'_> {
                         })),
                     })))
                 }
-                _ => Ok(Some(json!({ "ok": false, "error": "camera needs player" }))),
+                Some("pose") => {
+                    let values: Option<Vec<f32>> =
+                        words[2..].iter().map(|w| w.parse::<f32>().ok()).collect();
+                    let Some(v) = values.filter(|v| v.len() == 5 || v.len() == 6) else {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "camera pose needs X Y Z YAW PITCH and optionally FOV",
+                        })));
+                    };
+                    let position = Vec3::new(v[0], v[1], v[2]);
+                    self.cinematix.take_pose(position, v[3], v[4], true);
+                    if let Some(fov) = v.get(5) {
+                        self.cinematix.set_fov(*fov);
+                    }
+                    Ok(Some(json!({
+                        "ok": true, "frame": self.cinematix.frame_number(),
+                        "camera": self.cinematix.camera_status().map(|(p, yaw, pitch, fov)| json!({
+                            "position": p, "yaw": yaw, "pitch": pitch, "fov": fov,
+                        })),
+                    })))
+                }
+                _ => Ok(Some(json!({ "ok": false, "error": "camera needs player or pose" }))),
             },
+            "interp" => {
+                let interp = match words.get(1).copied() {
+                    Some("step") => Interp::Step,
+                    Some("linear") => Interp::Linear,
+                    Some("smooth") => Interp::Smooth,
+                    Some("spline") => Interp::Spline,
+                    _ => {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "interp needs step, linear, smooth or spline",
+                        })));
+                    }
+                };
+                let set = self.cinematix.set_selected_interp(interp);
+                Ok(Some(if set {
+                    json!({ "ok": true, "interp": words[1] })
+                } else {
+                    json!({ "ok": false, "error": "no key selected" })
+                }))
+            }
             "section" => {
                 let Some(name) = words.get(1).copied() else {
                     return Ok(Some(json!({ "ok": false, "error": "section needs a name" })));
