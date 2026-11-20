@@ -28,8 +28,10 @@ restoring everything.
 | `cinematix-editor` crate, `Screen` variant, key binding | done — 25 tests; `Screen::Cinematix`, F8, `/cinematix` |
 | Editor lifecycle: open, close, cursor, input restoration | done — `game/interface/cinematix.rs`; verified headless |
 | Icon rail | done — eight sections with BBS mod's icon sheet (MIT, [ATTRIBUTION](ATTRIBUTION.md)); flat hover/active, tooltips, registered |
-| Dock tree and panel widget | partial — dock logic exists in `cinematix-ui`; the inspector is a fixed column, not dockable |
+| Dock tree and panel widget | partial — inspector/viewport/timeline split with draggable resizers, BBS panel headers; panels cannot be dragged out yet |
 | Overlay card, context menu | todo |
+| Top toolbar (save/undo/redo/render) | partial — Save writes the default `.cmx`; undo/redo/render are drawn dimmed and inert |
+| Bottom dock tabs (Dope Sheet / Curve Editor / Clips) | partial — Dope Sheet works; Curve Editor and Clips are drawn dimmed and inert |
 | Numeric scrubber | done — drawn with a track; drag with Shift ×10 and Ctrl ÷10 |
 | Viewport: live world + editor camera | done — the film camera renders while the screen is open; WASD/E/Q fly, right-drag look, FOV live |
 | Timeline: ruler, playhead, key rows, transport | done — drawn, scrubbable, keys move in time |

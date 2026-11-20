@@ -17,7 +17,7 @@ pub use document::{
     rest_value,
 };
 pub use draw::draw;
-pub use editor::{Button, Editor, EditorKey, Field, KeyResult, Section, fields_for};
+pub use editor::{Button, Editor, EditorKey, Field, KeyResult, Request, Section, fields_for};
 pub use film::{EXTENSION, FORMAT_VERSION, Stamp, load, save};
 pub use frame::{Frame, GUTTER_W, ROW_H};
 pub use icons as glyphs;

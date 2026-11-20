@@ -234,6 +234,25 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix || self.cinematix_export.is_some() {
             return;
         }
+        if let Some(cinematix_editor::Request::Save) = self.cinematix.take_request() {
+            let path = film_path();
+            let stamp = cinematix_editor::Stamp {
+                app_version: env!("CARGO_PKG_VERSION"),
+                saved_unix: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default(),
+            };
+            match cinematix_editor::save(&path, &self.cinematix.doc, stamp) {
+                Ok(()) => self.system_message(Text::tr(
+                    "horizon.cinematix.saved",
+                    &[&path.display().to_string()],
+                )),
+                Err(error) => {
+                    self.system_message(Text::tr("horizon.cinematix.render_error", &[&error]))
+                }
+            }
+        }
         let dt = elapsed.as_secs_f32().min(0.1);
         self.cinematix.advance(f64::from(dt));
         let _ = self.sync_cinematix_world();

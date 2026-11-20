@@ -1,6 +1,6 @@
 use crate::document::{kind_key, prop_key};
 use crate::editor::{Button, Editor, Field, Section};
-use crate::frame::{Frame, GUTTER_W, Row};
+use crate::frame::{Frame, Row};
 use crate::glyphs::{self, Icon};
 use cinematix_scene::NodeKind;
 use cinematix_ui::Rect;
@@ -77,16 +77,26 @@ fn icon_button(
 
 pub fn draw(ed: &Editor, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
     let f = ed.frame();
-    draw_header(ed, &f, batch, atlas);
+    let tool = draw_header(ed, &f, batch, atlas, cursor);
     let hovered = draw_rail(ed, &f, batch, atlas, cursor);
     draw_inspector(ed, &f, batch, atlas, cursor);
     draw_timeline(ed, &f, batch, atlas, cursor);
+    grip(batch, atlas, f.split_h, true);
+    grip(batch, atlas, f.split_v, false);
     if let Some(section) = hovered {
         ui::tooltip(batch, atlas, &[Text::translate(section.key(), &[])], cursor);
+    } else if let Some(tool) = tool {
+        ui::tooltip(batch, atlas, &[Text::translate(tool.label(), &[])], cursor);
     }
 }
 
-fn draw_header(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+fn draw_header(
+    ed: &Editor,
+    f: &Frame,
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+) -> Option<crate::frame::Tool> {
     fill(batch, atlas, f.header, HEADER_BG);
     batch.fill(
         atlas,
@@ -104,6 +114,23 @@ fn draw_header(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
         &Text::translate("cinematix.screen.title", &[]),
         TEXT,
     );
+
+    let mut hovered = None;
+    for (tool, r) in &f.tools {
+        let hover = r.contains(cursor.0, cursor.1);
+        if tool.enabled() {
+            if hover {
+                fill(batch, atlas, *r, HOVER);
+            }
+            tool_icon(*tool).draw(batch, atlas, r.x + 2.0, r.y + 2.0, 16.0, TEXT);
+            register(&Text::translate(tool.label(), &[]), *r);
+        } else {
+            tool_icon(*tool).draw(batch, atlas, r.x + 2.0, r.y + 2.0, 16.0, FAINT);
+        }
+        if hover {
+            hovered = Some(*tool);
+        }
+    }
 
     let fps = ed.fps();
     let frame = Text::tr("cinematix.header.frame", &[&ed.frame_number()]);
@@ -123,6 +150,26 @@ fn draw_header(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
         if x > right {
             tr(batch, atlas, x, f.header.y + 8.0, status, ACCENT);
         }
+    }
+    hovered
+}
+
+fn tool_icon(tool: crate::frame::Tool) -> Icon {
+    use crate::frame::Tool;
+    match tool {
+        Tool::Save => glyphs::SAVE,
+        Tool::Undo => glyphs::UNDO,
+        Tool::Redo => glyphs::REDO,
+        Tool::Render => glyphs::VIDEO_CAMERA,
+    }
+}
+
+fn tab_icon(tab: crate::frame::TimelineTab) -> Icon {
+    use crate::frame::TimelineTab;
+    match tab {
+        TimelineTab::DopeSheet => glyphs::LIST,
+        TimelineTab::Curves => glyphs::CURVES,
+        TimelineTab::Clips => glyphs::FILM,
     }
 }
 
@@ -174,6 +221,22 @@ fn draw_rail(
     hovered
 }
 
+fn grip(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, horizontal: bool) {
+    if horizontal {
+        batch.fill(atlas, r.x, r.y + 1.0, r.w, 1.0, LINE);
+        let cx = r.x + r.w * 0.5;
+        for i in -1..=1 {
+            batch.fill(atlas, cx + i as f32 * 5.0 - 1.0, r.y + 1.0, 2.0, 2.0, FAINT);
+        }
+    } else {
+        batch.fill(atlas, r.x + 1.0, r.y, 1.0, r.h, LINE);
+        let cy = r.y + r.h * 0.5;
+        for i in -1..=1 {
+            batch.fill(atlas, r.x + 1.0, cy + i as f32 * 5.0 - 1.0, 2.0, 2.0, FAINT);
+        }
+    }
+}
+
 fn draw_inspector(
     ed: &Editor,
     f: &Frame,
@@ -191,7 +254,7 @@ fn draw_inspector(
         LINE,
     );
     let x = f.inspector.x + 6.0;
-    let y = f.inspector.y + 8.0;
+    let y = f.inspector.y + 7.0;
     text(
         batch,
         atlas,
@@ -349,19 +412,40 @@ fn draw_timeline(
     fill(batch, atlas, f.timeline, PANEL_BG);
     batch.fill(atlas, f.timeline.x, f.timeline.y, f.timeline.w, 1.0, LINE);
 
-    text(
-        batch,
-        atlas,
-        f.timeline.x + 6.0,
-        f.timeline.y + 6.0,
-        &Text::translate("cinematix.timeline.channels", &[]),
-        DIM,
-    );
+    for (tab, r) in &f.tabs {
+        let active = *tab == crate::frame::TimelineTab::DopeSheet;
+        let hover = active && r.contains(cursor.0, cursor.1);
+        if active {
+            fill(batch, atlas, *r, ACTIVE);
+            batch.fill(atlas, r.x, r.y + r.h - 2.0, r.w, 2.0, ACCENT);
+        } else if hover {
+            fill(batch, atlas, *r, HOVER);
+        }
+        tab_icon(*tab).draw(
+            batch,
+            atlas,
+            r.x + 3.0,
+            r.y + 2.0,
+            16.0,
+            if active { TEXT } else { FAINT },
+        );
+        text(
+            batch,
+            atlas,
+            r.x + 22.0,
+            r.y + 6.0,
+            &Text::translate(tab.label(), &[]),
+            if active { TEXT } else { FAINT },
+        );
+        if active {
+            register(&Text::translate(tab.label(), &[]), *r);
+        }
+    }
     let count = Text::tr("cinematix.summary.channels", &[&ed.doc.channels.len()]);
     right_text(
         batch,
         atlas,
-        f.timeline.x + GUTTER_W - 6.0,
+        f.timeline.x + f.timeline.w - 6.0,
         f.timeline.y + 6.0,
         &count,
         FAINT,

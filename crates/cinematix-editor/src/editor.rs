@@ -2,7 +2,7 @@ use crate::document::Document;
 use crate::frame::Frame;
 use cinematix_anim::{Interp, Prop, Value};
 use cinematix_timeline::{Playhead, Snap, snap_t};
-use cinematix_ui::Mods;
+use cinematix_ui::{Mods, Tokens};
 use glam::{Quat, Vec3};
 
 pub const MIN_SPAN: f64 = 1.0 / 120.0;
@@ -221,6 +221,12 @@ pub enum KeyResult {
     Close,
 }
 
+/// What a panel button asked the game to do. Only implemented actions have a variant.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Request {
+    Save,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Drag {
     Playhead,
@@ -233,6 +239,14 @@ enum Drag {
         field: Field,
         start: f64,
         start_x: f32,
+    },
+    TimelineSplit {
+        start: f32,
+        y: f32,
+    },
+    InspectorSplit {
+        start: f32,
+        x: f32,
     },
 }
 
@@ -247,6 +261,10 @@ pub struct Editor {
     pub selected_key: Option<(usize, usize)>,
     pub selected_node: Option<cinematix_scene::NodeId>,
     pub status: Option<&'static str>,
+    /// The bottom dock's share of the stage, and the inspector's share of the width.
+    pub timeline_frac: f32,
+    pub inspector_frac: f32,
+    request: Option<Request>,
     t0: f64,
     t1: f64,
     size: (f32, f32),
@@ -276,6 +294,9 @@ impl Editor {
             selected_key: None,
             selected_node: None,
             status: None,
+            timeline_frac: 0.38,
+            inspector_frac: 0.22,
+            request: None,
             t0,
             t1,
             size: (0.0, 0.0),
@@ -296,7 +317,20 @@ impl Editor {
     }
 
     pub fn frame(&self) -> Frame {
-        Frame::build(&self.doc, self.section, self.scroll, self.size).with_window(self.t0, self.t1)
+        Frame::build(
+            &self.doc,
+            self.section,
+            self.scroll,
+            self.size,
+            self.timeline_frac,
+            self.inspector_frac,
+        )
+        .with_window(self.t0, self.t1)
+    }
+
+    /// A one-shot command the panel buttons asked for (Save), for the game to perform.
+    pub fn take_request(&mut self) -> Option<Request> {
+        self.request.take()
     }
 
     pub fn frame_number(&self) -> i64 {
@@ -510,6 +544,37 @@ impl Editor {
     /// editor's while it is open, so a click can never reach the world's block breaking.
     pub fn press(&mut self, pos: (f32, f32), mods: Mods) -> bool {
         let f = self.frame();
+        for (tool, r) in &f.tools {
+            if r.contains(pos.0, pos.1) {
+                if tool.enabled() {
+                    if *tool == crate::frame::Tool::Save {
+                        self.request = Some(Request::Save);
+                    }
+                }
+                return true;
+            }
+        }
+        if f.split_h.contains(pos.0, pos.1) {
+            self.drag = Some(Drag::TimelineSplit {
+                start: self.timeline_frac,
+                y: pos.1,
+            });
+            return true;
+        }
+        if f.split_v.contains(pos.0, pos.1) {
+            self.drag = Some(Drag::InspectorSplit {
+                start: self.inspector_frac,
+                x: pos.0,
+            });
+            return true;
+        }
+        for (tab, r) in &f.tabs {
+            if r.contains(pos.0, pos.1) {
+                // Only the dope sheet has a body; the other tabs are drawn but do nothing yet.
+                let _ = tab;
+                return true;
+            }
+        }
         for (s, r) in &f.rail_items {
             if r.contains(pos.0, pos.1) {
                 self.section = *s;
@@ -642,6 +707,16 @@ impl Editor {
                 let (min, max, step) = field.range();
                 let scrub = cinematix_ui::Scrubber::new(start, min, max, step);
                 field.set(&mut self.doc, scrub.drag(pos.0 - start_x, mods));
+                true
+            }
+            Drag::TimelineSplit { start, y } => {
+                let stage = (self.size.1 - Tokens::default().header_h).max(1.0);
+                self.timeline_frac = (start + (y - pos.1) / stage).clamp(0.2, 0.62);
+                true
+            }
+            Drag::InspectorSplit { start, x } => {
+                let width = self.size.0.max(1.0);
+                self.inspector_frac = (start + (x - pos.0) / width).clamp(0.12, 0.4);
                 true
             }
         }
@@ -1224,6 +1299,39 @@ mod tests {
         e.release();
         let v = Field::Fov.get(&e.doc);
         assert!((v - 90.0).abs() < 3.0, "{v}");
+    }
+
+    #[test]
+    fn dragging_the_splitter_resizes_the_timeline_and_inspector() {
+        let mut e = editor();
+        let f = e.frame();
+        let before = e.timeline_frac;
+        let p = (f.split_h.x + 20.0, f.split_h.y + 2.0);
+        assert!(e.press(p, Mods::default()));
+        assert!(e.drag_to((p.0, p.1 - 40.0), Mods::default()));
+        assert!(e.timeline_frac > before, "{}", e.timeline_frac);
+        e.release();
+
+        let f = e.frame();
+        let before = e.inspector_frac;
+        let p = (f.split_v.x + 2.0, f.split_v.y + 40.0);
+        assert!(e.press(p, Mods::default()));
+        assert!(e.drag_to((p.0 - 40.0, p.1), Mods::default()));
+        assert!(e.inspector_frac > before, "{}", e.inspector_frac);
+    }
+
+    #[test]
+    fn the_unimplemented_tabs_take_a_click_without_changing_anything() {
+        let mut e = editor();
+        let f = e.frame();
+        let (tab, r) = *f
+            .tabs
+            .iter()
+            .find(|(t, _)| *t == crate::frame::TimelineTab::Curves)
+            .unwrap();
+        assert_eq!(tab, crate::frame::TimelineTab::Curves);
+        assert!(e.press((r.x + 2.0, r.y + 2.0), Mods::default()));
+        assert_eq!(e.section, Section::Camera);
     }
 
     #[test]

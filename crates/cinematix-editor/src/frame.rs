@@ -8,6 +8,56 @@ pub const ROW_H: f32 = 18.0;
 pub const GUTTER_W: f32 = 156.0;
 pub const TRANSPORT_H: f32 = 24.0;
 pub const RULER_H: f32 = 18.0;
+pub const TAB_H: f32 = 20.0;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TimelineTab {
+    DopeSheet,
+    Curves,
+    Clips,
+}
+
+impl TimelineTab {
+    pub const ALL: [TimelineTab; 3] = [
+        TimelineTab::DopeSheet,
+        TimelineTab::Curves,
+        TimelineTab::Clips,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TimelineTab::DopeSheet => "cinematix.tab.dope_sheet",
+            TimelineTab::Curves => "cinematix.tab.curves",
+            TimelineTab::Clips => "cinematix.tab.clips",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tool {
+    Save,
+    Undo,
+    Redo,
+    Render,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 4] = [Tool::Save, Tool::Undo, Tool::Redo, Tool::Render];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tool::Save => "cinematix.tool.save",
+            Tool::Undo => "cinematix.tool.undo",
+            Tool::Redo => "cinematix.tool.redo",
+            Tool::Render => "cinematix.tool.render",
+        }
+    }
+
+    /// Tools without a backend yet are drawn dimmed and take no click.
+    pub fn enabled(self) -> bool {
+        matches!(self, Tool::Save)
+    }
+}
 
 pub struct Row {
     pub chan: usize,
@@ -25,6 +75,10 @@ pub struct Frame {
     pub ruler: Rect,
     pub lanes: Rect,
     pub transport: Rect,
+    pub split_h: Rect,
+    pub split_v: Rect,
+    pub tabs: Vec<(TimelineTab, Rect)>,
+    pub tools: Vec<(Tool, Rect)>,
     pub axis: TimeAxis,
     pub rail_items: Vec<(Section, Rect)>,
     pub buttons: Vec<(Button, Rect)>,
@@ -35,16 +89,25 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn build(doc: &Document, section: Section, scroll: usize, size: (f32, f32)) -> Self {
+    pub fn build(
+        doc: &Document,
+        section: Section,
+        scroll: usize,
+        size: (f32, f32),
+        timeline_frac: f32,
+        inspector_frac: f32,
+    ) -> Self {
         let (w, h) = size;
         let t = Tokens::default();
         let header_h = t.header_h;
         let rail_w = t.rail_w;
         let stage_h = (h - header_h).max(0.0);
-        let timeline_h = (stage_h * 0.38)
-            .clamp(96.0, 240.0)
-            .min((stage_h - 48.0).max(0.0));
-        let inspector_w = (w * 0.22).clamp(160.0, 300.0).min((w * 0.4).max(0.0));
+        let timeline_h = (stage_h * timeline_frac.clamp(0.2, 0.62))
+            .clamp(96.0, 320.0)
+            .min((stage_h - 80.0).max(0.0));
+        let inspector_w = (w * inspector_frac.clamp(0.12, 0.4))
+            .clamp(140.0, 340.0)
+            .min((w * 0.45).max(0.0));
 
         let header = Rect::new(0.0, 0.0, w, header_h);
         let rail = Rect::new(0.0, header_h, rail_w, stage_h - timeline_h);
@@ -76,6 +139,41 @@ impl Frame {
         );
 
         let axis = TimeAxis::new(0.0, 1.0, ruler.x, ruler.x + ruler.w);
+
+        let split_h = Rect::new(rail_w, timeline.y - 2.0, (w - rail_w).max(0.0), 4.0);
+        let split_v = Rect::new(
+            inspector.x - 2.0,
+            header_h,
+            4.0,
+            (stage_h - timeline_h).max(0.0),
+        );
+
+        let mut tabs = Vec::with_capacity(TimelineTab::ALL.len());
+        let mut tab_x = timeline.x + 4.0;
+        for tab in TimelineTab::ALL {
+            let width = match tab {
+                TimelineTab::DopeSheet => 84.0,
+                TimelineTab::Curves => 88.0,
+                TimelineTab::Clips => 56.0,
+            };
+            let rect = Rect::new(tab_x, timeline.y + 1.0, width, TAB_H);
+            if rect.x + rect.w > timeline.x + timeline.w - 4.0 {
+                break;
+            }
+            tabs.push((tab, rect));
+            tab_x += rect.w + 2.0;
+        }
+
+        let mut tools = Vec::with_capacity(Tool::ALL.len());
+        let mut tool_x = 72.0;
+        for tool in Tool::ALL {
+            let rect = Rect::new(tool_x, 4.0, 20.0, 20.0);
+            if rect.x + rect.w > w - 8.0 {
+                break;
+            }
+            tools.push((tool, rect));
+            tool_x += 22.0;
+        }
 
         let mut rail_items = Vec::with_capacity(Section::ALL.len());
         let mut y = rail.y + t.pad;
@@ -162,6 +260,10 @@ impl Frame {
             ruler,
             lanes,
             transport,
+            split_h,
+            split_v,
+            tabs,
+            tools,
             axis,
             rail_items,
             buttons,
@@ -190,7 +292,7 @@ mod tests {
     #[test]
     fn regions_tile_without_overlapping() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0));
+        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0), 0.38, 0.22);
         assert_eq!(f.header.w, 1280.0);
         assert!(f.rail.x + f.rail.w <= f.viewport.x + 0.01);
         assert!(f.viewport.x + f.viewport.w <= f.inspector.x + 0.01);
@@ -203,7 +305,7 @@ mod tests {
     fn a_small_window_still_places_every_region_inside_it() {
         for (w, h) in [(320.0, 240.0), (640.0, 480.0), (3840.0, 2160.0)] {
             let doc = Document::new();
-            let f = Frame::build(&doc, Section::Project, 0, (w, h));
+            let f = Frame::build(&doc, Section::Project, 0, (w, h), 0.38, 0.22);
             for r in [
                 f.header,
                 f.rail,
@@ -222,7 +324,7 @@ mod tests {
     #[test]
     fn every_rail_section_gets_a_button_that_stays_in_the_rail() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0));
+        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0), 0.38, 0.22);
         assert_eq!(f.rail_items.len(), Section::ALL.len());
         for (s, r) in &f.rail_items {
             assert!(f.rail.contains(r.x, r.y), "{s:?}");
@@ -233,7 +335,7 @@ mod tests {
     #[test]
     fn rows_cover_the_channels_from_the_scroll_position() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 2, (1280.0, 720.0));
+        let f = Frame::build(&doc, Section::Camera, 2, (1280.0, 720.0), 0.38, 0.22);
         assert_eq!(f.rows.first().map(|r| r.chan), Some(2));
         assert!(f.rows.len() <= f.visible_rows);
         for r in &f.rows {
@@ -244,7 +346,8 @@ mod tests {
     #[test]
     fn the_time_axis_maps_the_window_onto_the_ruler() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0)).with_window(0.0, 10.0);
+        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0), 0.38, 0.22)
+            .with_window(0.0, 10.0);
         assert!((f.axis.x(0.0) - f.ruler.x).abs() < 0.01);
         assert!((f.axis.x(10.0) - (f.ruler.x + f.ruler.w)).abs() < 0.01);
     }

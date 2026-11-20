@@ -1410,5 +1410,12 @@
   "cinematix.action.delete_key": "Delete key",
   "cinematix.action.zoom_in": "Zoom in",
   "cinematix.action.zoom_out": "Zoom out",
-  "cinematix.action.fit": "Fit film"
+  "cinematix.action.fit": "Fit film",
+  "cinematix.tab.dope_sheet": "Dope Sheet",
+  "cinematix.tab.curves": "Curve Editor",
+  "cinematix.tab.clips": "Clips",
+  "cinematix.tool.save": "Save film",
+  "cinematix.tool.undo": "Undo (not implemented)",
+  "cinematix.tool.redo": "Redo (not implemented)",
+  "cinematix.tool.render": "Render (use /cinematix render)"
 }

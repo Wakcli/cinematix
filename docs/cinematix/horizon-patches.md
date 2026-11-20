@@ -22,7 +22,7 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 | File | Change | Lines |
 |---|---|---|
 | `crates/horizon-client/src/game.rs` | `Screen::Cinematix` variant, id, `Game` fields, draw arm (skipped during a render), HUD gate, cursor/wheel/key/tick hooks, camera orientation and effects, render dispatch, pack frame timing | +52 −3 |
-| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera, `.cmx` save/load, numeric pose, channel selection, interpolation, render dispatch, world dispatch, `/cinematix`, ctl | +622 (new) |
+| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera, `.cmx` save/load (toolbar too), numeric pose, channel selection, interpolation, render dispatch, world dispatch, `/cinematix`, ctl | +641 (new) |
 | `crates/horizon-client/src/game/interface/cinematix_export.rs` | new module: the render job, per-frame readback, FFmpeg hand-off, remesh settling | +423 (new) |
 | `crates/horizon-client/src/game/interface/cinematix_world.rs` | new module: resolve `WorldDeltaLayer` at the playhead, dirty remesh, the `world` command | +261 (new) |
 | `crates/horizon-client/src/game/interface/screens.rs` | `is_pause_screen`, `blurs_background` arms and their tests | +7 −4 |
@@ -54,7 +54,7 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 | `crates/horizon-client-input/src/keybinds.rs` | `key.cinematix` = F8 (`misc`) | +2 |
 | `crates/horizon-client-input/src/actions.rs` | `Cinematix` action | +1 |
 | `crates/horizon-client/Cargo.toml` | `cinematix-editor` dependency | +1 |
-| `crates/horizon-client/assets/horizon/lang/en_us.json` | 79 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +77 −1 |
+| `crates/horizon-client/assets/horizon/lang/en_us.json` | 95 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +93 −1 |
 | `tools/layers.json` | six `cinematix-*` crates at `engine` | +10 −2 |
 
 Deliberate deviations from the rules above:
