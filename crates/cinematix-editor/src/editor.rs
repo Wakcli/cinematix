@@ -686,7 +686,17 @@ impl Editor {
         };
         let t = self.playhead.t;
         self.checkpoint();
-        match self.doc.insert_key(ci, t) {
+        let target = &self.doc.channels[ci].target;
+        let key = if self.preview_free && target.node == self.doc.scene.camera {
+            match target.prop {
+                Prop::Translation => self.doc.upsert_key(ci, t, Value::Vec3(self.free_pos.to_array())),
+                Prop::Rotation => self.doc.upsert_key(ci, t, Value::Quat(rotation_from_view(self.free_yaw, self.free_pitch).to_array())),
+                _ => self.doc.insert_key(ci, t),
+            }
+        } else {
+            self.doc.insert_key(ci, t)
+        };
+        match key {
             Some(ki) => {
                 self.selected_channel = Some(ci);
                 self.selected_key = Some((ci, ki));
@@ -2026,6 +2036,18 @@ mod tests {
         assert_eq!(e.frame_number(), 1);
         e.step(-1);
         assert_eq!(e.frame_number(), 0);
+    }
+
+    #[test]
+    fn first_camera_key_captures_detached_position() {
+        let mut e = editor();
+        e.toggle_free_view();
+        let position = Vec3::new(2.0, 5.0, 8.0);
+        e.free_nudge(position);
+        assert_eq!(e.doc.key_count(), 0);
+        assert!(e.add_key());
+        assert_eq!(e.doc.key_count(), 1);
+        assert_eq!(e.camera_at(0.0).unwrap().0, position);
     }
 
     #[test]

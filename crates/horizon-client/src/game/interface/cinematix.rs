@@ -227,12 +227,11 @@ impl Game<'_> {
             let (dx, dy) = (self.cursor.0 - last.0, self.cursor.1 - last.1);
             self.cinematix_look = Some(self.cursor);
             let sensitivity = if self.has_control_down() { 0.04 } else { 0.15 };
+            if (dx != 0.0 || dy != 0.0) && !self.cinematix.preview_free {
+                self.cinematix.toggle_free_view();
+            }
             if self.cinematix.preview_free {
-                self.cinematix
-                    .free_look(dx * sensitivity, dy * sensitivity);
-            } else {
-                self.cinematix
-                    .look(dx * sensitivity, dy * sensitivity);
+                self.cinematix.free_look(dx * sensitivity, dy * sensitivity);
             }
         }
         let mods = self.cinematix_mods();
@@ -336,11 +335,10 @@ impl Game<'_> {
         // so this only reads: a tap cannot leave the camera drifting.
         const SPEED: f32 = 8.0;
         let delta = dir.normalize() * SPEED * dt;
-        if self.cinematix.preview_free {
-            self.cinematix.free_nudge(delta);
-        } else {
-            self.cinematix.nudge_camera(delta);
+        if !self.cinematix.preview_free {
+            self.cinematix.toggle_free_view();
         }
+        self.cinematix.free_nudge(delta);
     }
 
     /// The film camera's path and the playback camera marker, drawn while the editor is open.
