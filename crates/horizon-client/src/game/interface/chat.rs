@@ -208,6 +208,16 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
     literal(&mut d, camera, "player");
     let pose = literal(&mut d, camera, "pose");
     argument(&mut d, pose, "values", ArgType::Greedy);
+    let channel = literal(&mut d, root, "channel");
+    argument(
+        &mut d,
+        channel,
+        "channel",
+        ArgType::StrEnum(
+            &["position", "rotation", "fov", "focus", "aperture"],
+            "argument.enum.invalid",
+        ),
+    );
     let interp = literal(&mut d, root, "interp");
     argument(
         &mut d,

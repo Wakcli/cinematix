@@ -56,6 +56,10 @@ scrubbing reported exactly those poses at the keys, (5.625, 64, -0.625) at frame
 (5,64,0) and (10,64,5)). Playing for about a second advanced to frame 24 with the camera at
 (5.719, 64, -0.635); `pause` stopped it.
 
+Rotation keys were checked separately with the position still: `cinematix channel rotation`, a key
+at frame 0 (yaw 0) and a pose at frame 48 (yaw 90) gave yaw 0, 14.0625, 45, 75.9375 and 90 at frames
+0, 12, 24, 36 and 48 — slerp under the `Smooth` easing, 4 keys total.
+
 Film file, verified headless across two game processes: `cinematix save /tmp/session.cmx` wrote a
 918-byte zip (`project.toml` format 1, `app_version 0.1.0`, `scene.json` with 10 channels and one
 key); a second world loaded it, reported one key and the camera at the saved pose

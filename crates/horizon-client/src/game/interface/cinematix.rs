@@ -4,7 +4,7 @@
 //! the game's screen, pointer and key dispatch.
 
 use super::{Game, HudBatch, Screen};
-use cinematix_editor::{EditorKey, Interp, KeyResult, Mods, Section};
+use cinematix_editor::{EditorKey, Interp, KeyResult, Mods, Prop, Section};
 use glam::Vec3;
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
@@ -26,6 +26,7 @@ pub const HELP: &[&str] = &[
     "cinematix camera player        set the film camera to the player's eye and view angles",
     "cinematix camera pose X Y Z YAW PITCH [FOV]   place the film camera numerically",
     "cinematix interp step|linear|smooth|spline   set the selected key's interpolation",
+    "cinematix channel position|rotation|fov|focus|aperture   select the camera channel to key",
     "cinematix save [PATH]          write the film as .cmx (default: <game dir>/cinematix/film.cmx)",
     "cinematix load PATH            replace the film with a .cmx",
     "cinematix new                  start an empty film",
@@ -272,6 +273,7 @@ impl Game<'_> {
                 "load" => "horizon.cinematix.loaded",
                 "new" => "horizon.cinematix.new",
                 "interp" => "horizon.cinematix.interp",
+                "channel" => "horizon.cinematix.channel",
                 "camera" if words.get(1) == Some(&"pose") => "horizon.cinematix.pose",
                 _ => "horizon.cinematix.status",
             };
@@ -465,6 +467,33 @@ impl Game<'_> {
                 }
                 _ => Ok(Some(json!({ "ok": false, "error": "camera needs player or pose" }))),
             },
+            "channel" => {
+                let prop = match words.get(1).copied() {
+                    Some("position" | "translation") => Prop::Translation,
+                    Some("rotation") => Prop::Rotation,
+                    Some("fov") => Prop::Fov,
+                    Some("focus") => Prop::Focus,
+                    Some("aperture") => Prop::Aperture,
+                    _ => {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": "channel needs position, rotation, fov, focus or aperture",
+                        })));
+                    }
+                };
+                match self
+                    .cinematix
+                    .doc
+                    .channel_index(self.cinematix.doc.scene.camera, prop)
+                {
+                    Some(ci) => {
+                        self.cinematix.selected_channel = Some(ci);
+                        self.cinematix.selected_key = None;
+                        Ok(Some(json!({ "ok": true, "channel": ci })))
+                    }
+                    None => Ok(Some(json!({ "ok": false, "error": "no such channel" }))),
+                }
+            }
             "interp" => {
                 let interp = match words.get(1).copied() {
                     Some("step") => Interp::Step,

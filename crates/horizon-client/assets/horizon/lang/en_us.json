@@ -1395,5 +1395,6 @@
   "horizon.cinematix.loaded": "Film loaded from %s.",
   "horizon.cinematix.new": "New film.",
   "horizon.cinematix.interp": "Key interpolation set to %s.",
-  "horizon.cinematix.pose": "Camera placed at frame %s."
+  "horizon.cinematix.pose": "Camera placed at frame %s.",
+  "horizon.cinematix.channel": "Camera channel %s selected."
 }

@@ -8,7 +8,7 @@ mod editor;
 mod film;
 mod frame;
 
-pub use cinematix_anim::Interp;
+pub use cinematix_anim::{Interp, Prop};
 pub use cinematix_ui::{Mods, Rect};
 pub use document::{
     Document, camera_data, default_interp, key_light_data, kind_key, new_node, prop_key, props_of,
