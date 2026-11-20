@@ -1608,11 +1608,11 @@ impl Editor {
         }
     }
 
-    /// The camera's field of view at the playhead.
-    pub fn preview_fov(&self) -> f32 {
+    /// The camera's field of view at `t`.
+    pub fn fov_at(&self, t: f64) -> f32 {
         let id = self.doc.scene.camera;
         if let Some(ci) = self.doc.channel_index(id, Prop::Fov)
-            && let Some(Value::F32(v)) = self.doc.value_at(ci, self.playhead.t)
+            && let Some(Value::F32(v)) = self.doc.value_at(ci, t)
         {
             return v;
         }
@@ -1620,6 +1620,35 @@ impl Editor {
             Some(c) => c.fov_deg,
             None => 70.0,
         }
+    }
+
+    /// The camera's field of view at the playhead.
+    pub fn preview_fov(&self) -> f32 {
+        self.fov_at(self.playhead.t)
+    }
+
+    /// The times of the camera's translation keys, or nothing when the camera has no path.
+    /// Flashback's overlay and ours use this as the segment list.
+    pub fn camera_path_times(&self) -> Vec<f64> {
+        let id = self.doc.scene.camera;
+        let Some(ci) = self.doc.channel_index(id, Prop::Translation) else {
+            return Vec::new();
+        };
+        let mut times: Vec<f64> = self.doc.channels[ci].keys.iter().map(|k| k.t).collect();
+        times.sort_by(|a, b| a.total_cmp(b));
+        times.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        times
+    }
+
+    /// The selected key's time when it is a camera position key, for the overlay's red marker.
+    pub fn selected_camera_key_time(&self) -> Option<f64> {
+        let (ci, ki) = self.selected_key?;
+        let id = self.doc.scene.camera;
+        let position = self.doc.channel_index(id, Prop::Translation)?;
+        if ci != position {
+            return None;
+        }
+        self.doc.channels.get(ci)?.keys.get(ki).map(|k| k.t)
     }
 
     /// Adopts a pose as the camera's pose. Without `force` a keyed camera is left alone:
@@ -2672,6 +2701,21 @@ mod tests {
             Mods::default()
         ));
         assert!(!e.looping);
+    }
+
+    #[test]
+    fn the_camera_path_lists_its_keys_and_the_selected_time() {
+        let mut e = editor();
+        e.seek_frame(0);
+        assert!(e.add_key());
+        e.seek_frame(24);
+        assert!(e.add_key());
+        e.seek_frame(48);
+        assert!(e.add_key());
+        assert_eq!(e.camera_path_times(), vec![0.0, 1.0, 2.0]);
+        e.selected_key = Some((e.selected_channel.unwrap(), 1));
+        assert_eq!(e.selected_camera_key_time(), Some(1.0));
+        assert!((e.fov_at(0.0) - 70.0).abs() < 0.01);
     }
 
     #[test]

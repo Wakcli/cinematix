@@ -5,7 +5,8 @@
 
 use super::{Game, HudBatch, Screen};
 use cinematix_editor::{EditorKey, Interp, KeyResult, Mods, Prop, Section};
-use glam::Vec3;
+use glam::{Quat, Vec3};
+use horizon_client::gizmos::{Gizmos, Line};
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
 use std::sync::mpsc::Sender;
@@ -329,6 +330,74 @@ impl Game<'_> {
         const SPEED: f32 = 8.0;
         self.cinematix
             .nudge_camera(dir.normalize() * SPEED * dt);
+    }
+
+    /// The film camera's path and the playback camera marker, drawn while the editor is open.
+    /// Only the current segment and its immediate neighbours are drawn, as Flashback does: the
+    /// whole film's path would be noise, and the current segment is what a keyframe edit changes.
+    pub(super) fn cinematix_camera_path(&self, g: &mut Gizmos) {
+        if self.screen != Screen::Cinematix || self.cinematix_export.is_some() {
+            return;
+        }
+        let ed = &self.cinematix;
+        let times = ed.camera_path_times();
+        if times.is_empty() {
+            return;
+        }
+        let t = ed.time();
+        let last = times.iter().rposition(|&k| k <= t + 1e-9);
+        let next = times.iter().position(|&k| k > t + 1e-9);
+        let selected = ed.selected_camera_key_time();
+
+        let mut markers = Vec::new();
+        if let Some(li) = last {
+            if li > 0 {
+                markers.push(li - 1);
+            }
+            markers.push(li);
+        }
+        if let Some(ni) = next {
+            markers.push(ni);
+            if ni + 1 < times.len() {
+                markers.push(ni + 1);
+            }
+        }
+        markers.sort_unstable();
+        markers.dedup();
+        for &i in &markers {
+            let Some((position, rotation)) = ed.camera_at(times[i]) else {
+                continue;
+            };
+            let colour = if selected.is_some_and(|s| (s - times[i]).abs() < 1e-9) {
+                PATH_SELECTED
+            } else if Some(i) == last || Some(i) == next {
+                PATH_KEY
+            } else {
+                PATH_FADE
+            };
+            camera_frustum(g, position, rotation, ed.fov_at(times[i]), colour);
+            key_cross(g, position, colour);
+        }
+
+        if let Some(li) = last {
+            if li > 0 {
+                camera_path_segment(g, ed, times[li - 1], times[li], PATH_FADE);
+            }
+            if let Some(ni) = next {
+                camera_path_segment(g, ed, times[li], times[ni], PATH_FULL);
+                if ni + 1 < times.len() {
+                    camera_path_segment(g, ed, times[ni], times[ni + 1], PATH_FADE);
+                }
+            }
+        } else if let Some(ni) = next
+            && ni + 1 < times.len()
+        {
+            camera_path_segment(g, ed, times[ni], times[ni + 1], PATH_FADE);
+        }
+
+        if let Some((position, rotation)) = ed.camera_at(t) {
+            camera_marker(g, position, rotation);
+        }
     }
 
     /// `/cinematix ...`: the open film's transport from chat.
@@ -923,4 +992,113 @@ mod tests {
         assert_eq!(editor_key(KeyCode::Escape), Some(EditorKey::Escape));
         assert_eq!(editor_key(KeyCode::KeyA), None);
     }
+
+    #[test]
+    fn a_camera_frustum_draws_four_edges_and_a_far_rectangle_on_top() {
+        let mut g = Gizmos::default();
+        camera_frustum(&mut g, Vec3::ZERO, Quat::IDENTITY, 70.0, PATH_KEY);
+        assert_eq!(g.on_top.len(), 8);
+        assert!(g.on_top.iter().all(|l| l.color == PATH_KEY && l.width > 0.0));
+        assert!(g.lines.is_empty());
+    }
+
+    #[test]
+    fn the_playback_marker_points_forward_in_green() {
+        let mut g = Gizmos::default();
+        camera_marker(&mut g, Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY);
+        assert_eq!(g.on_top.len(), 3);
+        assert!(g.on_top.iter().all(|l| l.color == PATH_CURRENT));
+        assert!(g.on_top[0].end[2] < g.on_top[0].start[2], "{:?}", g.on_top[0]);
+    }
+
+    #[test]
+    fn a_key_cross_has_three_coloured_axes() {
+        let mut g = Gizmos::default();
+        key_cross(&mut g, Vec3::ZERO, PATH_SELECTED);
+        assert_eq!(g.on_top.len(), 3);
+        assert!(g.on_top.iter().all(|l| l.color == PATH_SELECTED));
+    }
 }
+
+
+const PATH_FULL: u32 = 0xFFFF_D700;
+const PATH_FADE: u32 = 0x80FF_D700;
+const PATH_KEY: u32 = 0xFFFF_FF20;
+const PATH_SELECTED: u32 = 0xFFFF_2020;
+const PATH_CURRENT: u32 = 0xFF20_FF20;
+
+fn path_line(g: &mut Gizmos, a: Vec3, b: Vec3, colour: u32, width: f32) {
+    g.on_top.push(Line {
+        start: [f64::from(a.x), f64::from(a.y), f64::from(a.z)],
+        end: [f64::from(b.x), f64::from(b.y), f64::from(b.z)],
+        color: colour,
+        width,
+    });
+}
+
+fn camera_path_segment(
+    g: &mut Gizmos,
+    ed: &cinematix_editor::Editor,
+    from: f64,
+    to: f64,
+    colour: u32,
+) {
+    let span = to - from;
+    if span <= 0.0 {
+        return;
+    }
+    let steps = ((span * 20.0).ceil() as usize).clamp(2, 400);
+    let mut previous = None;
+    for i in 0..=steps {
+        let t = from + span * i as f64 / steps as f64;
+        let Some((position, _)) = ed.camera_at(t) else {
+            continue;
+        };
+        if let Some(last) = previous {
+            path_line(g, last, position, colour, 2.0);
+        }
+        previous = Some(position);
+    }
+}
+
+/// A wireframe camera frustum: the apex at the pose, four edges to the far plane and its
+/// rectangle. The local forward is `-Z`, as `camera_at` returns it.
+fn camera_frustum(g: &mut Gizmos, position: Vec3, rotation: Quat, fov: f32, colour: u32) {
+    let half = (fov.to_radians() * 0.5).tan().clamp(0.2, 1.2);
+    let d = 0.55;
+    let h = d * half;
+    let w = h * (16.0 / 9.0);
+    let local = [
+        Vec3::new(-w, h, -d),
+        Vec3::new(w, h, -d),
+        Vec3::new(w, -h, -d),
+        Vec3::new(-w, -h, -d),
+    ];
+    let world = local.map(|c| position + rotation * c);
+    for corner in world {
+        path_line(g, position, corner, colour, 1.5);
+    }
+    for i in 0..4 {
+        path_line(g, world[i], world[(i + 1) % 4], colour, 1.5);
+    }
+}
+
+fn key_cross(g: &mut Gizmos, position: Vec3, colour: u32) {
+    let r = 0.18;
+    path_line(g, position - Vec3::X * r, position + Vec3::X * r, colour, 2.0);
+    path_line(g, position - Vec3::Y * r, position + Vec3::Y * r, colour, 2.0);
+    path_line(g, position - Vec3::Z * r, position + Vec3::Z * r, colour, 2.0);
+}
+
+/// The playback marker: a green forward line and a cross 1.2 m ahead, so it is visible even
+/// when the apex itself sits exactly on the near plane.
+fn camera_marker(g: &mut Gizmos, position: Vec3, rotation: Quat) {
+    let forward = rotation * Vec3::NEG_Z;
+    let right = rotation * Vec3::X;
+    let up = rotation * Vec3::Y;
+    path_line(g, position + forward * 0.2, position + forward * 3.0, PATH_CURRENT, 2.5);
+    let at = position + forward * 1.2;
+    path_line(g, at - right * 0.25, at + right * 0.25, PATH_CURRENT, 2.0);
+    path_line(g, at - up * 0.25, at + up * 0.25, PATH_CURRENT, 2.0);
+}
+

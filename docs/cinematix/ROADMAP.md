@@ -80,11 +80,14 @@ path wrote to `<player dir>/cinematix/film.cmx`.
 | Editing commands and undo | done — add/delete/move/interp, 64-step undo/redo (toolbar, Ctrl+Z/Y); live camera looks are not snapshotted |
 | Curve editor with Bezier handles | done — curve view per channel with X/Y/Z/W axes, vertical key editing, and both Bezier control points draggable in time and value; Bezier is offered in the interpolation menu |
 | Tree view (scene hierarchy) | done — disclosure, indentation, kind icons, selection |
+| Viewport camera path overlay | done — yellow frustum/cross markers at the surrounding keys, the current segment and neighbours, and a green forward line plus cross at the playback pose; hidden during an export |
 
 `Step`/`Linear`/`Smooth`/`Spline`/`Bezier` and quaternion slerp are implemented and tested.
-`Spline` is Catmull-Rom through the neighbouring keys, the same formula Studio's camera track uses
-(`crates/horizon-client/src/studio/spline.rs`): the film camera's position therefore follows a curve
-through its keys, not three independent eased axes. Cubic and Hermite as *distinct* modes are still
+`Spline` is centripetal Catmull-Rom through the neighbouring keys, with the keys' real times as the
+knots — the same parameterisation as Flashback's SMOOTH mode. It keeps the path through a corner
+inside the chord instead of the uniform formula's overshoot, and a two-key film stays the straight
+segment. The film camera's position therefore follows a curve through its keys, not three
+independent eased axes. Cubic and Hermite as *distinct* modes are still
 absent; `Smooth` and `Bezier` cover the practical cases.
 
 ## Phase 4 — scene and camera
@@ -95,7 +98,7 @@ absent; `Smooth` and `Bezier` cover the practical cases.
 | Camera data (fov, focus, aperture) | done as data |
 | Camera rigs: free, orbit, dolly, rail, spline | partial — preview and free fly; `camera orbit` (centre, radius, frames, height), `camera dolly` (delta, frames) and `camera rail` (frames, points) generate Spline keys and look-at rotations, from chat and ctl; constraints and blending are todo |
 | Constraints, shake, blending | partial — deterministic time-based camera shake (`Shake`, `Shake rate`) applied in the preview and therefore every rendered frame; constraints and blending are todo |
-| Gizmos, selection, path rendering | partial — `studio/path_render.rs` |
+| Gizmos, selection, path rendering | partial — Studio's `studio/path_render.rs`, and Cinematix's own overlay: the film camera's current segment and one key either side, key frustums and crosses, and the green playback marker, drawn on top of the world |
 | Spline paths, Catmull-Rom, arc length | partial — `studio/spline.rs`; arc-length parameterisation todo |
 
 ## Phase 5 — assets and rigging

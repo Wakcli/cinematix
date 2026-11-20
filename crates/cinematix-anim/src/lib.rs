@@ -1,5 +1,5 @@
 use cinematix_scene::NodeId;
-use glam::Quat;
+use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -139,61 +139,182 @@ fn blend(keys: &[Key], i: usize, u: f32) -> Value {
     a.v.lerp(b.v, u)
 }
 
-/// Catmull-Rom through `a` and `b`, with the neighbouring keys as tangents. The end segments
-/// extrapolate a virtual neighbour (`p1 - (p2 - p1)`), the same choice Studio's camera track
-/// makes, so a two-key film is a straight line and a third key bends it.
+/// Centripetal Catmull-Rom through the segment from `keys[i - 1]` to `keys[i]`, with the
+/// neighbouring keys as controls and their real times as the knots. Flashback's SMOOTH mode
+/// uses the same parameterisation; it keeps uneven key spacing from over-shooting the way the
+/// uniform formula can. The end segments use the segment's own key twice, so a two-key film is
+/// still the straight segment.
 fn spline(keys: &[Key], i: usize, u: f32) -> Value {
-    let a = &keys[i - 1].v;
-    let b = &keys[i].v;
-    let p0 = if i >= 2 {
-        keys[i - 2].v
-    } else {
-        extrapolate(*a, *b, true)
-    };
-    let p3 = if i + 1 < keys.len() {
-        keys[i + 1].v
-    } else {
-        extrapolate(*a, *b, false)
-    };
-    let catmull = |p0: f32, p1: f32, p2: f32, p3: f32| {
-        let t2 = u * u;
-        let t3 = t2 * u;
-        0.5 * ((2.0 * p1)
-            + (-p0 + p2) * u
-            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
-    };
-    match (p0, *a, *b, p3) {
+    let a = keys[i - 1];
+    let b = keys[i];
+    let before = if i >= 2 { keys[i - 2] } else { a };
+    let after = if i + 1 < keys.len() { keys[i + 1] } else { b };
+    let time1 = (a.t - before.t) as f32;
+    let time2 = (b.t - before.t) as f32;
+    let time3 = (after.t - before.t) as f32;
+    match (before.v, a.v, b.v, after.v) {
         (Value::F32(p0), Value::F32(p1), Value::F32(p2), Value::F32(p3)) => {
-            Value::F32(catmull(p0, p1, p2, p3))
+            Value::F32(catmull_scalar(p0, p1, p2, p3, time1, time2, time3, u))
         }
-        (Value::Vec3(p0), Value::Vec3(p1), Value::Vec3(p2), Value::Vec3(p3)) => Value::Vec3([
-            catmull(p0[0], p1[0], p2[0], p3[0]),
-            catmull(p0[1], p1[1], p2[1], p3[1]),
-            catmull(p0[2], p1[2], p2[2], p3[2]),
-        ]),
-        (Value::Color(p0), Value::Color(p1), Value::Color(p2), Value::Color(p3)) => Value::Color([
-            catmull(p0[0], p1[0], p2[0], p3[0]),
-            catmull(p0[1], p1[1], p2[1], p3[1]),
-            catmull(p0[2], p1[2], p2[2], p3[2]),
-            catmull(p0[3], p1[3], p2[3], p3[3]),
-        ]),
+        (Value::Vec3(p0), Value::Vec3(p1), Value::Vec3(p2), Value::Vec3(p3)) => Value::Vec3(
+            catmull_vec3(
+                Vec3::from_array(p0),
+                Vec3::from_array(p1),
+                Vec3::from_array(p2),
+                Vec3::from_array(p3),
+                time1,
+                time2,
+                time3,
+                u,
+            )
+            .to_array(),
+        ),
+        (Value::Color(p0), Value::Color(p1), Value::Color(p2), Value::Color(p3)) => {
+            Value::Color(std::array::from_fn(|c| {
+                catmull_scalar(p0[c], p1[c], p2[c], p3[c], time1, time2, time3, u)
+            }))
+        }
         // Rotations have no meaningful Catmull-Rom; they slerp, as Studio's track does.
-        _ => a.lerp(*b, u),
+        _ => a.v.lerp(b.v, u),
     }
 }
 
-fn extrapolate(a: Value, b: Value, backwards: bool) -> Value {
-    let f = |a: f32, b: f32| if backwards { a - (b - a) } else { b + (b - a) };
-    match (a, b) {
-        (Value::F32(a), Value::F32(b)) => Value::F32(f(a, b)),
-        (Value::Vec3(a), Value::Vec3(b)) => {
-            Value::Vec3([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2])])
+fn catmull_knot(a: Vec3, b: Vec3) -> f32 {
+    (b - a).length_squared().powf(0.25)
+}
+
+fn catmull_scalar_knot(a: f32, b: f32) -> f32 {
+    (b - a).abs().sqrt()
+}
+
+/// The time-aware centripetal Catmull-Rom of Flashback's `CatmullRom.position`.
+fn catmull_vec3(
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+    p3: Vec3,
+    time1: f32,
+    time2: f32,
+    time3: f32,
+    amount: f32,
+) -> Vec3 {
+    let tj1 = catmull_knot(p0, p1);
+    let tj2 = catmull_knot(p1, p2);
+    let tj3 = catmull_knot(p2, p3);
+    let average = (tj1 + tj2 + tj3) / 3.0;
+    if average <= 1e-9 {
+        return p1;
+    }
+    let relation = (time3 / 3.0) / average;
+    let delta = |tj: f32, dt: f32| {
+        if dt <= 0.0 {
+            0.0
+        } else {
+            (tj * relation) / ((tj * relation) / dt).clamp(0.4, 2.5)
         }
-        (Value::Color(a), Value::Color(b)) => {
-            Value::Color([f(a[0], b[0]), f(a[1], b[1]), f(a[2], b[2]), f(a[3], b[3])])
+    };
+    let dt1 = delta(tj1, time1);
+    let dt2 = delta(tj2, time2 - time1);
+    let dt3 = delta(tj3, time3 - time2);
+    let (t0, t1) = (0.0, dt1);
+    let t2 = t1 + dt2;
+    let t3 = t2 + dt3;
+    let t = t1 + (t2 - t1) * amount;
+    let lerp = |a: Vec3, b: Vec3, u: f32| a.lerp(b, u.clamp(0.0, 1.0));
+    let a1 = if t0 == t1 {
+        lerp(p0, p1, 0.5)
+    } else {
+        lerp(p0, p1, (t - t0) / (t1 - t0))
+    };
+    let a2 = if t1 == t2 {
+        lerp(p1, p2, 0.5)
+    } else {
+        lerp(p1, p2, (t - t1) / (t2 - t1))
+    };
+    let a3 = if t2 == t3 {
+        lerp(p2, p3, 0.5)
+    } else {
+        lerp(p2, p3, (t - t2) / (t3 - t2))
+    };
+    let b1 = if t0 == t2 {
+        lerp(a1, a2, 0.5)
+    } else {
+        lerp(a1, a2, (t - t0) / (t2 - t0))
+    };
+    let b2 = if t1 == t3 {
+        lerp(a2, a3, 0.5)
+    } else {
+        lerp(a2, a3, (t - t1) / (t3 - t1))
+    };
+    if t1 == t2 {
+        lerp(b1, b2, 0.5)
+    } else {
+        lerp(b1, b2, (t - t1) / (t2 - t1))
+    }
+}
+
+fn catmull_scalar(
+    p0: f32,
+    p1: f32,
+    p2: f32,
+    p3: f32,
+    time1: f32,
+    time2: f32,
+    time3: f32,
+    amount: f32,
+) -> f32 {
+    let tj1 = catmull_scalar_knot(p0, p1);
+    let tj2 = catmull_scalar_knot(p1, p2);
+    let tj3 = catmull_scalar_knot(p2, p3);
+    let average = (tj1 + tj2 + tj3) / 3.0;
+    if average <= 1e-9 {
+        return p1;
+    }
+    let relation = (time3 / 3.0) / average;
+    let delta = |tj: f32, dt: f32| {
+        if dt <= 0.0 {
+            0.0
+        } else {
+            (tj * relation) / ((tj * relation) / dt).clamp(0.4, 2.5)
         }
-        (a, _) => a,
+    };
+    let dt1 = delta(tj1, time1);
+    let dt2 = delta(tj2, time2 - time1);
+    let dt3 = delta(tj3, time3 - time2);
+    let (t0, t1) = (0.0, dt1);
+    let t2 = t1 + dt2;
+    let t3 = t2 + dt3;
+    let t = t1 + (t2 - t1) * amount;
+    let lerp = |a: f32, b: f32, u: f32| a + (b - a) * u.clamp(0.0, 1.0);
+    let a1 = if t0 == t1 {
+        lerp(p0, p1, 0.5)
+    } else {
+        lerp(p0, p1, (t - t0) / (t1 - t0))
+    };
+    let a2 = if t1 == t2 {
+        lerp(p1, p2, 0.5)
+    } else {
+        lerp(p1, p2, (t - t1) / (t2 - t1))
+    };
+    let a3 = if t2 == t3 {
+        lerp(p2, p3, 0.5)
+    } else {
+        lerp(p2, p3, (t - t2) / (t3 - t2))
+    };
+    let b1 = if t0 == t2 {
+        lerp(a1, a2, 0.5)
+    } else {
+        lerp(a1, a2, (t - t0) / (t2 - t0))
+    };
+    let b2 = if t1 == t3 {
+        lerp(a2, a3, 0.5)
+    } else {
+        lerp(a2, a3, (t - t1) / (t3 - t1))
+    };
+    if t1 == t2 {
+        lerp(b1, b2, 0.5)
+    } else {
+        lerp(b1, b2, (t - t1) / (t2 - t1))
     }
 }
 
@@ -283,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn a_spline_bends_between_uneven_keys_where_a_straight_line_would_not() {
+    fn a_spline_eases_between_uneven_keys_instead_of_using_the_chord() {
         let c = chan(vec![
             v3(0.0, 0.0, 64.0, 0.0, Interp::Spline),
             v3(1.0, 1.0, 64.0, 0.0, Interp::Spline),
@@ -292,8 +413,28 @@ mod tests {
         let Some(Value::Vec3(mid)) = c.eval(0.5) else {
             panic!()
         };
-        assert!(mid[0] > 0.5, "x should overshoot the chord: {mid:?}");
-        assert!(mid[2] < 0.0, "z should dip below the first key: {mid:?}");
+        assert!(
+            (mid[0] - 0.5).abs() > 0.01,
+            "the curve eases instead of the straight chord: {mid:?}"
+        );
+    }
+
+    #[test]
+    fn a_spline_bows_off_the_chord_through_a_corner() {
+        let c = chan(vec![
+            v3(0.0, 0.0, 64.0, 0.0, Interp::Spline),
+            v3(1.0, 5.0, 64.0, 5.0, Interp::Spline),
+            v3(2.0, 10.0, 64.0, 0.0, Interp::Spline),
+        ]);
+        let Some(Value::Vec3(second)) = c.eval(1.5) else {
+            panic!()
+        };
+        // The chord at this point is (7.5, 64, 2.5); a curved path is off it.
+        let bow = ((second[0] - 7.5).powi(2) + (second[2] - 2.5).powi(2)).sqrt();
+        assert!(
+            bow > 0.01,
+            "the path should bow around the corner: {second:?}"
+        );
     }
 
     #[test]

@@ -21,8 +21,8 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 
 | File | Change | Lines |
 |---|---|---|
-| `crates/horizon-client/src/game.rs` | `Screen::Cinematix` variant, id, `Game` fields, draw arm (skipped during a render), HUD gate, cursor/wheel/key/tick hooks, camera orientation and effects, render dispatch, pack frame timing, film environment applied to the sampled sky | +76 −3 |
-| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera paths/shake, `.cmx` save/load (toolbar too), numeric pose, channel selection, interpolation, meta, environment, undo/redo, render dispatch, world dispatch, `/cinematix`, ctl | +926 (new) |
+| `crates/horizon-client/src/game.rs` | `Screen::Cinematix` variant, id, `Game` fields, draw arm (skipped during a render), HUD gate, cursor/wheel/key/tick hooks, camera orientation and effects, render dispatch, pack frame timing, film environment applied to the sampled sky | +77 −3 |
+| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera paths/shake, the path overlay, `.cmx` save/load (toolbar too), numeric pose, channel selection, interpolation, meta, environment, undo/redo, render dispatch, world dispatch, `/cinematix`, ctl | +1104 (new) |
 | `crates/horizon-client/src/game/interface/cinematix_export.rs` | new module: the render job, per-frame readback, resume scan, progress, FFmpeg hand-off, remesh settling | +495 (new) |
 | `crates/horizon-client/src/game/interface/cinematix_world.rs` | new module: resolve `WorldDeltaLayer` at the playhead, revision-gated dirty remesh, box fills, the `world` command | +343 (new) |
 | `crates/horizon-client/src/game/interface/screens.rs` | `is_pause_screen`, `blurs_background` arms and their tests | +7 −4 |
