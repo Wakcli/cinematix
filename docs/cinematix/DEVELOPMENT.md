@@ -112,6 +112,8 @@ xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
   $CTL --socket $SOCK cinematix save /tmp/film.cmx
   $CTL --socket $SOCK cinematix new              # empty film, camera at the player
   $CTL --socket $SOCK cinematix load /tmp/film.cmx
+  $CTL --socket $SOCK cinematix world set 0 120 5 minecraft:gold_block 1.0
+  $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film-frames
   $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film-frames
   $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film.mp4
   $CTL --socket $SOCK ui                         # the rail buttons and the FOV sliders, by id
@@ -121,6 +123,10 @@ xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
   $CTL --socket $SOCK quit
 '
 ```
+
+A film's world overrides are client-side: `cinematix world set|remove|restore|clear|list|status`
+edits the layer, the playhead activates ops, and the mesher remeshes the changed sections. Nothing
+is written to the world or the save; closing the editor clears the overlay.
 
 Rendering needs the world still and the renderer offscreen: launch with `HORIZON_STILL=1`, pass
 `--offscreen`, and set `options-set chunkSectionFadeInTime 0`. `cinematix render` refuses with the

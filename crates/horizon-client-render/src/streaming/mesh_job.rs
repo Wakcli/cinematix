@@ -38,6 +38,7 @@ pub(super) fn mesh_section(
         translucent_layers: &settings.translucent_layers,
         leaf_culling: settings.leaf_culling,
         hidden_states: &context.hidden_states,
+        overrides: settings.overrides.as_deref(),
         part_tables: &context.part_tables,
         assets: &context.assets,
         render: &context.render,
@@ -67,6 +68,7 @@ impl Streaming {
             opaque_ice: self.opaque_ice,
             translucent_layers: self.translucent_layers.clone(),
             leaf_culling: self.leaf_culling,
+            overrides: self.overrides.clone(),
         }
     }
 }

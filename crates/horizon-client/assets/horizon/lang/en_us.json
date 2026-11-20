@@ -1399,5 +1399,7 @@
   "horizon.cinematix.channel": "Camera channel %s selected.",
   "horizon.cinematix.render_started": "Rendering %s frames into %s.",
   "horizon.cinematix.render_done": "Rendered %s frames into %s.",
-  "horizon.cinematix.render_error": "Render failed: %s"
+  "horizon.cinematix.render_error": "Render failed: %s",
+  "horizon.cinematix.world_changed": "World layer updated: %s blocks active.",
+  "horizon.cinematix.world_cleared": "World layer cleared."
 }

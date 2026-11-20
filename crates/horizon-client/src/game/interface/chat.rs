@@ -210,6 +210,8 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
     literal(&mut d, camera, "player");
     let pose = literal(&mut d, camera, "pose");
     argument(&mut d, pose, "values", ArgType::Greedy);
+    let world = literal(&mut d, root, "world");
+    argument(&mut d, world, "args", ArgType::Greedy);
     let channel = literal(&mut d, root, "channel");
     argument(
         &mut d,

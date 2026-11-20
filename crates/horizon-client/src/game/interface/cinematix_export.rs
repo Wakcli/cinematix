@@ -33,6 +33,10 @@ pub(super) struct Render {
     dir: PathBuf,
     video: Option<PathBuf>,
     next: u32,
+    /// Frames spent waiting for the film's own edits to remesh, bounded so a job cannot hang.
+    stalls: u32,
+    /// Redraws still to give a freshly remeshed layer before the frame is drawn.
+    settle: u32,
     reply: Option<Sender<String>>,
     saved_size: [u32; 2],
     saved_playhead: f64,
@@ -149,6 +153,8 @@ impl Game<'_> {
             dir: dir.clone(),
             video: video.clone(),
             next: start,
+            stalls: 0,
+            settle: 0,
             reply: reply.cloned(),
             saved_size,
             saved_playhead,
@@ -180,11 +186,40 @@ impl Game<'_> {
                 .expect("a running render");
             (render.next, render.fps, render.frame_path(render.next))
         };
+        self.cinematix.playhead.t = f64::from(frame) / f64::from(fps);
+        // The layer can mark sections dirty at this very frame (an op activating here). Give the
+        // world update and the mesher two redraws to land the remesh, then wait for the queues;
+        // the frame is retried, never skipped.
+        if self.sync_cinematix_world() {
+            self.cinematix_export
+                .as_mut()
+                .expect("a running render")
+                .settle = 2;
+        }
+        {
+            let render = self.cinematix_export.as_mut().expect("a running render");
+            if render.settle > 0 {
+                render.settle -= 1;
+                return Ok(false);
+            }
+        }
+        if self.streaming.busy()
+            || !self.world.dirty_sections.is_empty()
+            || !self.pending_uploads.is_empty()
+        {
+            let render = self.cinematix_export.as_mut().expect("a running render");
+            render.stalls += 1;
+            if render.stalls > 1200 {
+                self.end_cinematix_render(Err(
+                    "the world did not finish meshing the film's block edits".into(),
+                ));
+            }
+            return Ok(false);
+        }
         if let Some(refusal) = self.stillness_refusal(false) {
-            self.end_cinematix_render(Err(refusal.to_owned()));
+            self.end_cinematix_render(Err(refusal));
             return Ok(true);
         }
-        self.cinematix.playhead.t = f64::from(frame) / f64::from(fps);
         {
             let renderer = self.renderer.as_mut().ok_or("no renderer")?;
             renderer.screenshot = Some(ScreenshotRequest {
@@ -239,6 +274,8 @@ impl Game<'_> {
             return Ok(true);
         }
         render.next += 1;
+        render.stalls = 0;
+        render.settle = 0;
         if render.next >= render.end {
             self.finish_cinematix_render();
         }
@@ -258,6 +295,7 @@ impl Game<'_> {
             "fps": render.fps,
             "size": [render.width, render.height],
             "elapsed_ms": elapsed_ms,
+            "stalls": render.stalls,
         });
         if let Some(video) = &render.video {
             value["video"] = json!(video.display().to_string());
@@ -298,6 +336,10 @@ impl Game<'_> {
         }
         self.cinematix.playhead.t = render.saved_playhead;
         self.cinematix.playing = render.saved_playing;
+        // The world layer follows the playhead back: a block that was active for frame N is gone
+        // again in the editor's own time.
+        self.cinematix_world_time = None;
+        let _ = self.sync_cinematix_world();
     }
 
     fn report_cinematix_render(

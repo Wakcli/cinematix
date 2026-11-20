@@ -116,8 +116,10 @@ impl Streaming {
     pub fn viewed_mesh_source(&self) -> MeshSource {
         let context = self.shared.context.read().unwrap().clone();
         let settings = MeshSettings {
-            // These sections draw in the raster view, outside the player's ray scene.
+            // These sections draw in the raster view, outside the player's ray scene, and never
+            // carry the film's overrides: another level is not the film's set.
             looks: self.looks,
+            overrides: None,
             ..self.mesh_settings()
         };
         MeshSource {

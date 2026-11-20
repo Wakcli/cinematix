@@ -22,27 +22,36 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 | File | Change | Lines |
 |---|---|---|
 | `crates/horizon-client/src/game.rs` | `Screen::Cinematix` variant, id, `Game` fields, draw arm (skipped during a render), HUD gate, cursor/wheel/key/tick hooks, camera orientation and effects, render dispatch, pack frame timing | +52 −3 |
-| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera, `.cmx` save/load, numeric pose, channel selection, interpolation, render dispatch, `/cinematix`, ctl | +611 (new) |
-| `crates/horizon-client/src/game/interface/cinematix_export.rs` | new module: the render job, per-frame readback, FFmpeg hand-off | +381 (new) |
+| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera, `.cmx` save/load, numeric pose, channel selection, interpolation, render dispatch, world dispatch, `/cinematix`, ctl | +622 (new) |
+| `crates/horizon-client/src/game/interface/cinematix_export.rs` | new module: the render job, per-frame readback, FFmpeg hand-off, remesh settling | +423 (new) |
+| `crates/horizon-client/src/game/interface/cinematix_world.rs` | new module: resolve `WorldDeltaLayer` at the playhead, dirty remesh, the `world` command | +261 (new) |
 | `crates/horizon-client/src/game/interface/screens.rs` | `is_pause_screen`, `blurs_background` arms and their tests | +7 −4 |
 | `crates/horizon-client/src/game/interface/perspective.rs` | `camera_view` returns the editor's preview pose | +5 |
 | `crates/horizon-client/src/game/interface/fov.rs` | `fov_degrees` returns the preview field of view | +3 |
 | `crates/horizon-client/src/game/interface/frame_geometry.rs` | the detached camera draws no hand | +1 −1 |
 | `crates/horizon-client/src/game/interface/play_keys.rs` | F8 opens; Escape closes; keys stop at the editor | +9 |
-| `crates/horizon-client/src/game/interface/chat.rs` | `/cinematix` suggestion grammar (render, save, load, camera, interp, channel) | +95 −1 |
+| `crates/horizon-client/src/game/interface/chat.rs` | `/cinematix` suggestion grammar (render, save, load, camera, interp, channel, world) | +97 −1 |
 | `crates/horizon-client/src/game/interface/debug_options.rs` | F3+F6 does not interrupt the editor | +1 |
 | `crates/horizon-client/src/game/runtime/control.rs` | `cinematix` ctl dispatch (deferred replies included), render gate, HELP, screen name; F7-F10 in the `key` parser | +14 |
 | `crates/horizon-client/src/game/runtime/agent/mod.rs` | screen name | +1 |
 | `crates/horizon-client/src/game/runtime/core_tests.rs` | the screen-id list and its uniqueness test | +1 |
 | `crates/horizon-client/src/game/runtime/screenshot_sequence.rs` | the stillness helper shared with `cinematix render`, with named causes | +61 −34 |
 | `crates/horizon-client-render/src/gfx.rs` | `Renderer::offscreen()` | +6 |
+| `crates/horizon-client-render/src/mesher.rs` | `Overrides`, the mesher field, the padded-volume application and its tests | +102 −1 |
+| `crates/horizon-client-render/src/streaming.rs` | `Streaming::set_overrides`, the field and `MeshSettings` | +10 |
+| `crates/horizon-client-render/src/streaming/mesh_job.rs` | hands the overrides to the mesher | +2 |
+| `crates/horizon-client-render/src/streaming/viewed_meshing.rs` | viewed levels never take the film's overrides | +3 −1 |
+| `crates/horizon-client/src/game/network/viewed_worlds/meshing.rs` | `block_changed` is `pub(in crate::game)` | +1 −1 |
+| `crates/horizon-client/src/game/network/viewed_worlds/mod.rs` | `meshing` is visible in `game` | +1 −1 |
+| `crates/horizon-client-render/src/mesher/*_tests.rs` | the `Mesher` literals gain `overrides: None` | +1 each |
+| `crates/horizon-client/src/game/interface/shader_pack_looks_tests.rs` | its `Mesher` literal gains `overrides: None` | +1 |
 | `crates/horizon-client/Cargo.toml` | `cinematix-render` dependency | +2 |
 | `crates/horizon-client/src/game/network/remote/mod.rs` | `/cinematix` reaches `cinematix_command` | +3 |
 | `crates/horizon-client/src/bin/horizon-ctl/commands.rs` | the `cinematix` command in `horizon-ctl help` | +5 |
 | `crates/horizon-client-input/src/keybinds.rs` | `key.cinematix` = F8 (`misc`) | +2 |
 | `crates/horizon-client-input/src/actions.rs` | `Cinematix` action | +1 |
 | `crates/horizon-client/Cargo.toml` | `cinematix-editor` dependency | +1 |
-| `crates/horizon-client/assets/horizon/lang/en_us.json` | 77 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +75 −1 |
+| `crates/horizon-client/assets/horizon/lang/en_us.json` | 79 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +77 −1 |
 | `tools/layers.json` | six `cinematix-*` crates at `engine` | +10 −2 |
 
 Deliberate deviations from the rules above:

@@ -1770,6 +1770,11 @@ struct Game<'a> {
     pub(super) cinematix_look: Option<(f32, f32)>,
     /// A running `cinematix render` (game/interface/cinematix_export.rs).
     pub(super) cinematix_export: Option<cinematix_export::Render>,
+    /// The film's world layer resolved at the playhead, as the mesher draws it
+    /// (game/interface/cinematix_world.rs).
+    pub(super) cinematix_world: cinematix_world::Applied,
+    /// The playhead time `cinematix_world` was resolved at.
+    pub(super) cinematix_world_time: Option<f64>,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
@@ -10937,6 +10942,8 @@ impl<'a> Game<'a> {
             cinematix: Default::default(),
             cinematix_look: None,
             cinematix_export: None,
+            cinematix_world: Default::default(),
+            cinematix_world_time: None,
             lan: None,
             integrated: None,
             level_shapes: Default::default(),

@@ -267,6 +267,7 @@ fn the_mesher_asks_a_mod_source_once_per_block_with_the_world_around_it() {
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
         hidden_states: &[],
+        overrides: None,
         part_tables: Default::default(),
     };
     let mesh = mesher.mesh(&region, 0);
@@ -481,6 +482,7 @@ fn a_block_tinted_by_a_mod_resolver_meshes_with_its_colour_and_follows_its_input
             translucent_layers: &[],
             leaf_culling: LeafCullingMode::Off,
             hidden_states: &[],
+            overrides: None,
             part_tables: Default::default(),
         };
         let mesh = mesher.mesh(&region, 0);

@@ -122,10 +122,18 @@ added deliberately, with FBX behind a feature, and the choice recorded here when
 
 | Item | Status |
 |---|---|
-| Override layer with time-activated ops | done — `WorldDeltaLayer`, indexed, tested |
-| Insertion into chunk read path | todo |
-| Dirty-set driven remesh | todo |
-| Animated structures | todo |
+| Override layer with time-activated ops | done — `WorldDeltaLayer`, indexed, 3 tests |
+| Insertion into chunk read path | done — `Overrides` snapshot written into the mesher's padded block volume |
+| Dirty-set driven remesh | done — the playhead diff marks each changed position's 3x3x3 sections |
+| Animated structures | partial — time-activated single blocks work; multi-block structures and light propagation not yet |
+
+Verified headless (fresh world, seed 41, camera at 0.5 120 0.5 looking +Z, gold at 0 120 5 active
+from 1.0 s): frame 0 and frame 23 (t = 0.958 s) are byte-identical (SHA-256 `a2b7c5…`), frame 24
+(t = 1.0 s) differs (`e143cf…`) and reads gold at the probe pixels; the render took 31 ms because
+it waited two redraws for the remesh. Quitting and relaunching the same world with no layer
+(`ops: 0`) and the same camera produced frame 0 with hash `a2b7c5…` again - the block never reached
+the save. Region-file hashes change across a save because the server rewrites them; the reload
+frame, not the file bytes, is what shows the saved blocks are unchanged.
 
 ## Phase 8 — offline rendering
 

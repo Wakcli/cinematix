@@ -166,6 +166,25 @@ BlockOp { pos, change: Set | Remove | Restore, at: Option<f64> }
 O(1) lookup per position; the renderer asks once per chunk rebuild; a dirty set drives remeshes.
 Removing the layer restores the world because the world on disk never changed.
 
+Implemented in `game/interface/cinematix_world.rs` and the mesher:
+
+- `sync_cinematix_world` resolves `WorldDeltaLayer::at(pos, t)` for every op position at the
+  playhead. `Set` becomes the registry's state id, `Remove` becomes air (0), `Restore` and no
+  active op mean "no override". The set is diffed against the previous one; each changed position
+  marks its section and the 26 neighbours dirty (`viewed_worlds::meshing::block_changed`), then
+  the new set goes to `Streaming::set_overrides`.
+- The mesher carries an `Option<&Overrides>` snapshot; `mesh_reusing` writes the entries that fall
+  in its padded 20x20x20 block volume after `Padded::fill`, so faceting, occlusion, fluid and tint
+  reads all see the film's block. The uniform-air fast path is skipped only when an override
+  touches that section. A job with no overrides is byte-for-byte the old path (`None`).
+- During `cinematix render`, a frame whose playhead changes the layer waits two redraws and then
+  for the streaming queues, so the remesh lands before the frame is drawn; a job that cannot settle
+  aborts after 1200 redraws.
+- The client's `World`, the integrated server and the save are never written: only
+  `world.dirty_sections` and the mesher's view change. Gameplay block queries keep the real world.
+- The overlay exists only while the editor screen is open (`close_cinematix_screen` clears it and
+  remeshes back). `cinematix world set|remove|restore|clear|list|status` edits the layer.
+
 ## 8. Rendering and lighting
 
 Honest constraint, from the audit: Horizon's shader packs shade sky, material, entity, weather,

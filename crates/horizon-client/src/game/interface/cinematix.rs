@@ -28,6 +28,10 @@ pub const HELP: &[&str] = &[
     "cinematix camera pose X Y Z YAW PITCH [FOV]   place the film camera numerically",
     "cinematix interp step|linear|smooth|spline   set the selected key's interpolation",
     "cinematix channel position|rotation|fov|focus|aperture   select the camera channel to key",
+    "cinematix world set X Y Z BLOCK [AT]     draw a block there from AT seconds (no AT: always)",
+    "cinematix world remove X Y Z [AT]        draw air there",
+    "cinematix world restore X Y Z [AT]       stop overriding that position",
+    "cinematix world clear|list|status        drop every op, list them, or report the active set",
     "cinematix save [PATH]          write the film as .cmx (default: <game dir>/cinematix/film.cmx)",
     "cinematix load PATH            replace the film with a .cmx",
     "cinematix new                  start an empty film",
@@ -101,6 +105,7 @@ impl Game<'_> {
         );
         self.cinematix.take_pose(position, pose.1, pose.2, false);
         self.cinematix_look = None;
+        let _ = self.sync_cinematix_world();
         self.keys.clear();
         self.left = false;
         self.right = false;
@@ -115,6 +120,7 @@ impl Game<'_> {
         if self.screen == Screen::Cinematix {
             self.cinematix.playing = false;
             self.cinematix_look = None;
+            self.clear_cinematix_world();
             self.screen = Screen::Playing;
             self.capture(true);
         }
@@ -230,6 +236,7 @@ impl Game<'_> {
         }
         let dt = elapsed.as_secs_f32().min(0.1);
         self.cinematix.advance(f64::from(dt));
+        let _ = self.sync_cinematix_world();
         if dt <= 0.0 {
             return;
         }
@@ -286,6 +293,7 @@ impl Game<'_> {
                 "new" => "horizon.cinematix.new",
                 "interp" => "horizon.cinematix.interp",
                 "channel" => "horizon.cinematix.channel",
+                "world" => "horizon.cinematix.world_changed",
                 "render" => "horizon.cinematix.render_started",
                 "camera" if words.get(1) == Some(&"pose") => "horizon.cinematix.pose",
                 _ => "horizon.cinematix.status",
@@ -376,6 +384,7 @@ impl Game<'_> {
                     None => return Ok(Some(json!({ "ok": false, "error": "frame needs a number" }))),
                 };
                 self.cinematix.seek_frame(n);
+                let _ = self.sync_cinematix_world();
                 Ok(Some(json!({ "ok": true, "frame": self.cinematix.frame_number(), "time": self.cinematix.time() })))
             }
             "seek" => {
@@ -384,6 +393,7 @@ impl Game<'_> {
                     None => return Ok(Some(json!({ "ok": false, "error": "seek needs seconds" }))),
                 };
                 self.cinematix.seek(t);
+                let _ = self.sync_cinematix_world();
                 Ok(Some(json!({ "ok": true, "frame": self.cinematix.frame_number(), "time": self.cinematix.time() })))
             }
             "key" => {
@@ -516,6 +526,7 @@ impl Game<'_> {
                 }
                 _ => Ok(Some(json!({ "ok": false, "error": "camera needs player or pose" }))),
             },
+            "world" => return self.cinematix_world_control(&words[1..]),
             "channel" => {
                 let prop = match words.get(1).copied() {
                     Some("position" | "translation") => Prop::Translation,

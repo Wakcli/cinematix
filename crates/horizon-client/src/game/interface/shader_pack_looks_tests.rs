@@ -59,6 +59,7 @@ fn mesh(game: &super::Game<'_>, sy: i32) -> SectionMesh {
         translucent_layers: &[],
         leaf_culling: s.leaf_culling,
         hidden_states: &context.hidden_states,
+        overrides: None,
         part_tables: &context.part_tables,
     };
     let mut mesh = mesher.mesh(&region, sy);
