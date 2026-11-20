@@ -183,6 +183,9 @@ impl Game<'_> {
             return true;
         }
         if button == winit::event::MouseButton::Right {
+            if pressed && self.cinematix.right_press(self.cursor) {
+                return true;
+            }
             self.cinematix_look = pressed.then_some(self.cursor);
             return true;
         }

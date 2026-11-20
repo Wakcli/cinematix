@@ -29,7 +29,7 @@ restoring everything.
 | Editor lifecycle: open, close, cursor, input restoration | done — `game/interface/cinematix.rs`; verified headless |
 | Icon rail | done — eight sections with BBS mod's icon sheet (MIT, [ATTRIBUTION](ATTRIBUTION.md)); flat hover/active, tooltips, registered |
 | Dock tree and panel widget | partial — inspector/viewport/timeline split with draggable resizers, BBS panel headers; panels cannot be dragged out yet |
-| Overlay card, context menu | todo |
+| Overlay card, context menu | partial — right-click menus on rows/keys/lanes with add/delete/interpolation/fit; mute, rename and paste are drawn dimmed and inert; no overlay card yet |
 | Top toolbar (save/undo/redo/render) | partial — Save writes the default `.cmx`; undo/redo/render are drawn dimmed and inert |
 | Bottom dock tabs (Dope Sheet / Curve Editor / Clips) | partial — Dope Sheet works; Curve Editor and Clips are drawn dimmed and inert |
 | Numeric scrubber | done — drawn with a track; drag with Shift ×10 and Ctrl ÷10 |

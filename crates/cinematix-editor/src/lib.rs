@@ -8,6 +8,7 @@ mod editor;
 mod film;
 mod frame;
 pub mod icons;
+mod menu;
 
 pub use cinematix_anim::{Interp, Prop};
 pub use cinematix_scene::{BlockChange, BlockPos, BlockState as FilmBlock};
@@ -21,3 +22,4 @@ pub use editor::{Button, Editor, EditorKey, Field, KeyResult, Request, Section, 
 pub use film::{EXTENSION, FORMAT_VERSION, Stamp, load, save};
 pub use frame::{Frame, GUTTER_W, ROW_H};
 pub use icons as glyphs;
+pub use menu::Menu;

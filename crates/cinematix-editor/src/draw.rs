@@ -88,6 +88,42 @@ pub fn draw(ed: &Editor, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f
     } else if let Some(tool) = tool {
         ui::tooltip(batch, atlas, &[Text::translate(tool.label(), &[])], cursor);
     }
+    if let Some(menu) = &ed.menu {
+        draw_menu(batch, atlas, menu, cursor);
+    }
+}
+
+fn draw_menu(batch: &mut HudBatch, atlas: &HudAtlas, menu: &crate::menu::Menu, cursor: (f32, f32)) {
+    let size = (batch.width, batch.height);
+    let r = menu.rect(size);
+    fill(batch, atlas, r, rgba(16, 16, 16, 250));
+    batch.fill(atlas, r.x, r.y, r.w, 1.0, LINE);
+    batch.fill(atlas, r.x, r.y + r.h - 1.0, r.w, 1.0, LINE);
+    batch.fill(atlas, r.x, r.y, 1.0, r.h, LINE);
+    batch.fill(atlas, r.x + r.w - 1.0, r.y, 1.0, r.h, LINE);
+    for (i, item) in menu.items.iter().enumerate() {
+        let row = menu.row(r, i);
+        let hover = !item.header && item.enabled && row.contains(cursor.0, cursor.1);
+        if hover {
+            fill(batch, atlas, row, HOVER);
+        }
+        let colour = if item.header || !item.enabled {
+            FAINT
+        } else {
+            TEXT
+        };
+        if item.checked {
+            batch.fill(atlas, row.x + 2.0, row.y + 4.0, 2.0, row.h - 8.0, ACCENT);
+        }
+        text(
+            batch,
+            atlas,
+            row.x + 9.0,
+            row.y + 3.0,
+            &Text::translate(item.label, &[]),
+            colour,
+        );
+    }
 }
 
 fn draw_header(

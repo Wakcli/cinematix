@@ -1417,5 +1417,13 @@
   "cinematix.tool.save": "Save film",
   "cinematix.tool.undo": "Undo (not implemented)",
   "cinematix.tool.redo": "Redo (not implemented)",
-  "cinematix.tool.render": "Render (use /cinematix render)"
+  "cinematix.tool.render": "Render (use /cinematix render)",
+  "cinematix.menu.interpolation": "Interpolation",
+  "cinematix.interp.step": "Step",
+  "cinematix.interp.linear": "Linear",
+  "cinematix.interp.smooth": "Smooth",
+  "cinematix.interp.spline": "Spline",
+  "cinematix.menu.mute": "Mute channel (not implemented)",
+  "cinematix.menu.rename": "Rename (not implemented)",
+  "cinematix.menu.paste": "Paste key (not implemented)"
 }

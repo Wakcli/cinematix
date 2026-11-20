@@ -1,5 +1,6 @@
 use crate::document::Document;
 use crate::frame::Frame;
+use crate::menu::Menu;
 use cinematix_anim::{Interp, Prop, Value};
 use cinematix_timeline::{Playhead, Snap, snap_t};
 use cinematix_ui::{Mods, Tokens};
@@ -265,6 +266,7 @@ pub struct Editor {
     pub timeline_frac: f32,
     pub inspector_frac: f32,
     request: Option<Request>,
+    pub(crate) menu: Option<Menu>,
     t0: f64,
     t1: f64,
     size: (f32, f32),
@@ -297,6 +299,7 @@ impl Editor {
             timeline_frac: 0.38,
             inspector_frac: 0.22,
             request: None,
+            menu: None,
             t0,
             t1,
             size: (0.0, 0.0),
@@ -522,7 +525,13 @@ impl Editor {
                 self.fit();
                 KeyResult::Consumed
             }
-            EditorKey::Escape => KeyResult::Close,
+            EditorKey::Escape => {
+                if self.menu_escape() {
+                    KeyResult::Consumed
+                } else {
+                    KeyResult::Close
+                }
+            }
         }
     }
 
@@ -543,6 +552,9 @@ impl Editor {
     /// A pointer press. Returns true when the editor took it: everything inside the screen is the
     /// editor's while it is open, so a click can never reach the world's block breaking.
     pub fn press(&mut self, pos: (f32, f32), mods: Mods) -> bool {
+        if self.menu_click(pos) {
+            return true;
+        }
         let f = self.frame();
         for (tool, r) in &f.tools {
             if r.contains(pos.0, pos.1) {
