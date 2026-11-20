@@ -1,0 +1,234 @@
+use glam::{Quat, Vec3};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct NodeId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AssetId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Transform {
+    pub translation: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+        }
+    }
+}
+
+impl Transform {
+    pub fn from_translation(v: Vec3) -> Self {
+        Self { translation: v, ..Default::default() }
+    }
+
+    pub fn matrix(&self) -> glam::Mat4 {
+        glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CameraData {
+    pub fov_deg: f32,
+    pub near: f32,
+    pub far: f32,
+    pub focus_distance: f32,
+    pub aperture: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LightKind {
+    Point { range: f32 },
+    Spot { range: f32, inner_deg: f32, outer_deg: f32 },
+    Area { width: f32, height: f32 },
+    Sun,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LightData {
+    pub kind: LightKind,
+    pub color: [f32; 3],
+    pub temperature_k: f32,
+    pub intensity: f32,
+    pub shadows: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActorData {
+    pub rig: AssetId,
+    pub skin: Option<AssetId>,
+    pub cape: Option<AssetId>,
+    pub scale: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshInstance {
+    pub asset: AssetId,
+    pub material: Option<AssetId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NodeKind {
+    Empty,
+    Camera(CameraData),
+    Light(LightData),
+    Actor(ActorData),
+    Mesh(MeshInstance),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Node {
+    pub id: NodeId,
+    pub name: String,
+    pub parent: Option<NodeId>,
+    pub children: Vec<NodeId>,
+    pub rest: Transform,
+    pub kind: NodeKind,
+    pub visible: bool,
+    pub locked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AssetKind {
+    Rig,
+    Mesh,
+    Skin,
+    Texture,
+    Sound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetRef {
+    pub kind: AssetKind,
+    pub path: String,
+    pub sha256: Option<String>,
+    pub packed: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SceneMeta {
+    pub name: String,
+    pub author: String,
+    pub fps: f32,
+    pub range: (f64, f64),
+    pub resolution: (u32, u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct BlockPos {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
+
+impl BlockPos {
+    pub const fn new(x: i32, y: i32, z: i32) -> Self {
+        Self { x, y, z }
+    }
+
+    pub const fn chunk(self) -> (i32, i32) {
+        (self.x >> 4, self.z >> 4)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockState {
+    pub name: String,
+    pub props: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockChange {
+    Set(BlockState),
+    Remove,
+    Restore,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockOp {
+    pub pos: BlockPos,
+    pub change: BlockChange,
+    pub at: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorldDeltaLayer {
+    ops: Vec<BlockOp>,
+    index: HashMap<BlockPos, Vec<usize>>,
+}
+
+impl WorldDeltaLayer {
+    pub fn push(&mut self, op: BlockOp) {
+        let i = self.ops.len();
+        self.index.entry(op.pos).or_default().push(i);
+        self.ops.push(op);
+    }
+
+    pub fn set(&mut self, pos: BlockPos, change: BlockChange, at: Option<f64>) {
+        self.push(BlockOp { pos, change, at });
+    }
+
+    pub fn at(&self, pos: BlockPos, t: f64) -> Option<&BlockChange> {
+        let slots = self.index.get(&pos)?;
+        slots.iter().rev().find_map(|&i| {
+            let op = &self.ops[i];
+            if op.at.is_none_or(|a| a <= t) { Some(&op.change) } else { None }
+        })
+    }
+
+    pub fn resolved(&self, pos: BlockPos, t: f64) -> Option<&BlockState> {
+        match self.at(pos, t)? {
+            BlockChange::Set(s) => Some(s),
+            BlockChange::Remove | BlockChange::Restore => None,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+
+    pub fn chunk_keys(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.index.keys().map(|p| p.chunk())
+    }
+
+    pub fn ops(&self) -> &[BlockOp] {
+        &self.ops
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scene {
+    pub meta: SceneMeta,
+    pub nodes: HashMap<NodeId, Node>,
+    pub roots: Vec<NodeId>,
+    pub camera: NodeId,
+    pub world: WorldDeltaLayer,
+    pub assets: HashMap<AssetId, AssetRef>,
+}
+
+impl Scene {
+    pub fn node(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.get(&id)
+    }
+
+    pub fn parent_chain(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        let mut cur = Some(id);
+        std::iter::from_fn(move || {
+            let n = self.nodes.get(&cur?)?;
+            cur = n.parent;
+            Some(n.id)
+        })
+    }
+}
