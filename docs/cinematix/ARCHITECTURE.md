@@ -1,0 +1,232 @@
+# Cinematix architecture
+
+Cinematix is a native subsystem of Horizon: an in-game cinematography, animation and
+offline-rendering suite. It is not a mod, not a loader plugin, and not a second application. The
+editor runs inside the running singleplayer client, on Horizon's own renderer and UI kit.
+
+Evidence for every claim below is in [AUDIT.md](AUDIT.md).
+
+## 1. Where the work happens
+
+This repository is Horizon's tree plus Cinematix. There is no second renderer and no second window.
+
+```
+Game (singleplayer, server thread + client window)
+└── Screen::Cinematix                      editor open
+    ├── viewport      the live world, an editor camera, gizmos, path and light overlays
+    ├── chrome        icon rail, docked panels, inspector, timeline, curve editor
+    └── state         CinematixSession — scene, selection, playhead, undo
+```
+
+The editor is a `Screen`. Horizon already holds one at `game.rs:1147`, and
+`settings_shell::Shell` proves a large screen can be described by data instead of hand-drawn per
+variant. That is the model to copy: a screen that reads a state struct and emits commands.
+
+When the editor is closed, the game is unchanged. No background updates, no retained GPU resources
+beyond the asset store.
+
+## 2. Crates
+
+```
+crates/
+  cinematix-scene      scene graph, nodes, transforms, world delta layer      (no Horizon deps)
+  cinematix-anim       channels, keys, interpolation, pure evaluation         (no Horizon deps)
+  cinematix-timeline   time axis, zoom/pan, snapping, hit testing             (no Horizon deps)
+  cinematix-ui         widget logic: dock tree, scrubber, panel state         (no Horizon deps)
+  cinematix-render     render jobs, codecs, ffmpeg argument construction      (no Horizon deps)
+  cinematix-editor     the in-game editor screen: drawing, input, commands    (Horizon-facing)
+```
+
+Dependency rule:
+
+```
+cinematix-editor → cinematix-ui, cinematix-timeline, cinematix-scene, cinematix-anim,
+                   cinematix-render, horizon-client-render
+everything else  → std, glam, serde
+```
+
+Only `cinematix-editor` may name a `horizon_*` crate. Everything below it is testable with
+`cargo test` on a machine with no GPU, no game and no Minecraft install. That is what keeps the
+animation, timeline and project logic verifiable while the engine side stays in flux.
+
+`cinematix-editor` belongs in the engine layer, above `horizon-client-render` and below gameplay
+wiring: it draws with `HudBatch` and `ui`, but never ticks the world.
+
+## 3. What Horizon already provides, and must be used
+
+| Need | Use | Not |
+|---|---|---|
+| Screen lifecycle, input routing | `Screen` + `Game`, `game/ui_control.rs` | a new event loop |
+| Drawing | `HudBatch`, `HudAtlas`, `ui::*`, `hud_kit::*` | egui, a second GPU context |
+| Panels and surfaces | `hud_kit::plate::Plate`, `hud_kit::room::Room` | a retained-mode toolkit |
+| Curves, discs, arcs for gizmos | `hud_kit::shapes` | ad-hoc triangle math |
+| Text fields, sliders, scroll | `ui::EditBox`, `ui::slider`, `ui::Scroll` | new controls |
+| Camera free flight | `studio::StudioFreecam` | a second freecam |
+| Camera path evaluation | extend `studio::CameraTrack` | a parallel spline type |
+| Timeline interaction shape | `studio::TimelineUi` | a different interaction model |
+| Euler↔quaternion boundary | `camera::Mat4::to_glam`, `view_rotation_matrix` | re-derived conventions |
+| Frame stepping | `horizon-ctl screenshot-sequence`, `HORIZON_STILL` | a new capture path |
+| Replay capture | `studio::recorder`, `.mcpr` | a new recording format |
+| Strings | `Text::tr`, `lang::get` | English literals |
+| Controls | `ui::button` (registers) | `screen_draw::button` (paints only) |
+
+Upstream rules that apply to all Cinematix code: architecture layers
+(`tools/check_layers.py`), translation keys, HDR pass discipline, and keeping pull requests small.
+
+## 4. Editor activation and editing mode
+
+Activation is a key binding in `horizon-client-input/src/keybinds.rs`, plus an entry where Horizon
+already lists its own screens. Opening pushes the editor screen; closing restores the previous
+screen, cursor capture and input state.
+
+Editing mode must do exactly four things, and the audit found the hook for each:
+
+1. **Route input to the editor.** The screen has focus, so gameplay key handling is bypassed as it
+   already is for any open screen.
+2. **Stop gameplay movement.** Suppress the movement path, not the world.
+3. **Keep the editor camera independent.** `StudioFreecam` already holds a detached camera with its
+   own position and angles; the player entity is never moved.
+4. **Control the clock.** Authoring scrubs on a timeline clock; the world tick is frozen or stepped.
+   `HORIZON_STILL` already establishes frozen-world semantics.
+
+The player's position, rotation and camera must survive a full editor session unchanged. That is a
+test, not an intention.
+
+## 5. Time
+
+Two clocks, never confused:
+
+- **World tick** — Horizon's 20 Hz simulation. Frozen while authoring.
+- **Timeline** — `f64` seconds computed as `frame / fps`. The only input to animation evaluation.
+
+`evaluate(scene, t) -> Pose` is pure: no frame delta, no wall clock, no state carried between
+frames. Playback and export call the same function and must never reuse each other's results.
+
+Offline rendering evaluates at exactly `1/fps`, in `f64`, then snaps to the frame.
+
+## 6. Scene and animation model
+
+Already implemented and tested in `cinematix-scene` and `cinematix-anim`:
+
+```rust
+Scene { meta, nodes: HashMap<NodeId, Node>, roots, camera, world, assets }
+Node  { id, name, parent, children, rest: Transform, kind, visible, locked }
+NodeKind { Empty | Camera | Light | Actor | Mesh }
+Channel { target: PropPath, keys: Vec<Key>, muted }
+Key     { t: f64, v: Value, interp }
+Interp  { Step | Linear | Smooth | Bezier { out, in_ } }
+Value   { F32 | Vec3 | Quat | Color | Bool }
+```
+
+Design points that survive review:
+
+- Channels are keyed by a stable property path, not embedded in objects. That is what makes one
+  generic curve editor possible and it matches how BBS/McLib addresses properties.
+- Rotation is quaternion keys with slerp. Euler is a display and authoring convenience, converted at
+  the boundary using Horizon's YXZ convention.
+- Keys are sorted; lookup is binary search. Missing channels fall back to rest state; muted channels
+  are ignored entirely.
+- `WorldDeltaLayer` is an ordered op list indexed by block position, with an optional activation
+  time, so a wall can collapse on the timeline and the save is never touched.
+
+## 7. World overrides
+
+Non-destructive by construction. Nothing writes to a region file.
+
+```
+WorldDeltaLayer { ops: Vec<BlockOp>, index: HashMap<BlockPos, Vec<usize>> }
+BlockOp { pos, change: Set | Remove | Restore, at: Option<f64> }
+```
+
+O(1) lookup per position; the renderer asks once per chunk rebuild; a dirty set drives remeshes.
+Removing the layer restores the world because the world on disk never changed.
+
+## 8. Rendering and lighting
+
+Honest constraint, from the audit: Horizon's shader packs shade sky, material, entity, weather,
+post, tonemap and shadow. They do **not** shade imported meshes.
+
+Therefore:
+
+- **Stage 1 (the target):** imported meshes and primitives draw through Horizon's `HudBatch`-style
+  immediate path for editor overlays, and through a dedicated world-space pass for geometry, lit by
+  Cinematix light objects, using the same sun direction and exposure as the world. No pack
+  interaction. Visually consistent because both sides agree on lighting inputs.
+- **Stage 2:** publish lights into a buffer a *Cinematix* pack reads. Requires our own pack, not a
+  third-party one.
+- **Stage 3 (research, not promised):** join the pack's shadow and ray-tracing passes. The test
+  hardware here (GTX 1080) has no hardware ray queries, so `traced_*` packs cannot be validated on
+  this machine at all.
+
+Do not replace Horizon's pipeline and do not add a second renderer.
+
+## 9. Export
+
+Wrap what already works:
+
+```
+for frame in range:
+    t = frame / fps
+    pose = evaluate(scene, t)
+    apply(world_delta, t)
+    set camera from pose
+    capture offscreen
+    encode
+```
+
+`cinematix-render` already builds the job, sample times and ffmpeg arguments, and covers H.264,
+HEVC, ProRes 422, ProRes 4444 and PNG sequences, with alpha only where the codec carries it.
+
+Two limits found by running the engine, both recorded in [AUDIT.md](AUDIT.md):
+
+- `screenshot-sequence` output is the **surface size**, so arbitrary 1440p/4K needs an explicit
+  offscreen target that is not tied to the window. That is the first real renderer work.
+- The deterministic guards reject a run that has not settled, and can reject the first attempt.
+  A render job must retry the precondition rather than fail.
+
+## 10. Project format
+
+`.cmx` is a zip container:
+
+```
+scene.json        structure, channels, world ops, references
+assets/<sha256>.<ext>
+thumb.png
+project.toml      format version, app version, timestamps
+```
+
+JSON for mergeability and because agents must be able to read it. Blobs addressed by content hash
+for dedupe and integrity. `format_version` plus an explicit upcast chain, tested with fixtures.
+
+## 11. Documentation layout
+
+Upstream Horizon already owns `docs/architecture.md`, `docs/ui-kit.md` and the rest of `docs/`.
+Adding `docs/ARCHITECTURE.md` beside them is a collision on case-insensitive filesystems and a
+confusing duplicate everywhere else. Cinematix documentation lives under `docs/cinematix/`:
+
+```
+docs/cinematix/AUDIT.md          what the engine actually does, with evidence
+docs/cinematix/ARCHITECTURE.md   this file
+docs/cinematix/UI.md             the editor's UI, on Horizon's widget kit
+docs/cinematix/ROADMAP.md        phases, status, blockers
+docs/cinematix/DEVELOPMENT.md    build, run and test commands
+```
+
+Further subsystem documents (`RENDERING.md`, `ANIMATION.md`, `CAMERA.md`, `RIGGING.md`,
+`ASSET_PIPELINE.md`, `WORLD_MANIPULATION.md`, `SERIALIZATION.md`, `EXPORT.md`) are added when that
+subsystem exists. A document for unbuilt code is a liability: it gets read, trusted and then
+contradicted.
+
+## 12. Rules for contributors and agents
+
+- Read `AGENTS.md` (Cinematix rules, then upstream Horizon guidance) before editing.
+- Read [AUDIT.md](AUDIT.md) before proposing an integration point. Several obvious-looking ones do
+  not exist.
+- No `unwrap` outside tests; no panics on user data; a malformed `.cmx` is a recoverable error.
+- Public items get a doc comment; internal items do not.
+- No `unsafe` outside the crate that must touch a foreign interface.
+- Every crate keeps a fixture and a test for the behaviour it owns; determinism tests compare bytes.
+- A change to a Horizon file is recorded in `docs/cinematix/horizon-patches.md` with its line count.
+  That file is the upgrade checklist when the baseline moves.
+- Never claim a runtime behaviour from compilation. Interactive rendering needs a run; this
+  document distinguishes verified from read for exactly that reason.
