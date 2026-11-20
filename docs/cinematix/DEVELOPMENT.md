@@ -109,6 +109,9 @@ xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
   $CTL --socket $SOCK key w up
   $CTL --socket $SOCK set field-of-view 0.5      # registered slider: the view widens to 90
   $CTL --socket $SOCK cinematix camera player    # back to the player's eye
+  $CTL --socket $SOCK cinematix save /tmp/film.cmx
+  $CTL --socket $SOCK cinematix new              # empty film, camera at the player
+  $CTL --socket $SOCK cinematix load /tmp/film.cmx
   $CTL --socket $SOCK ui                         # the rail buttons and the FOV sliders, by id
   $CTL --socket $SOCK screenshot /tmp/editor.png
   $CTL --socket $SOCK key escape tap             # back to Playing

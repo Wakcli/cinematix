@@ -24,6 +24,9 @@ pub const HELP: &[&str] = &[
     "cinematix section NAME         switch the inspector (camera, actors, models, lights, world,",
     "                               film, render, project)",
     "cinematix camera player        set the film camera to the player's eye and view angles",
+    "cinematix save [PATH]          write the film as .cmx (default: <game dir>/cinematix/film.cmx)",
+    "cinematix load PATH            replace the film with a .cmx",
+    "cinematix new                  start an empty film",
 ];
 
 /// What `Game::open_cinematix_screen` does over `screen` (`blocked`: an overlay, the title
@@ -37,6 +40,13 @@ pub(super) fn cinematix_screen_opens(screen: Screen, blocked: bool) -> Option<bo
         return Some(false);
     }
     None
+}
+
+/// Where `cinematix save` writes without a path: the game's own folder, never the repository.
+fn film_path() -> std::path::PathBuf {
+    horizon_client::logging::player_dir()
+        .join("cinematix")
+        .join("film.cmx")
 }
 
 fn editor_key(key: KeyCode) -> Option<EditorKey> {
@@ -256,10 +266,16 @@ impl Game<'_> {
                 "key" => "horizon.cinematix.key_added",
                 "delkey" => "horizon.cinematix.key_deleted",
                 "frame" | "seek" => "horizon.cinematix.seeked",
+                "save" => "horizon.cinematix.saved",
+                "load" => "horizon.cinematix.loaded",
+                "new" => "horizon.cinematix.new",
                 _ => "horizon.cinematix.status",
             };
-            let frame = reply["frame"].as_i64().unwrap_or_default();
-            self.system_message(Text::tr(key, &[&frame]));
+            let detail = match (words[0], key) {
+                ("save" | "load", _) => reply["path"].as_str().unwrap_or_default().to_owned(),
+                _ => reply["frame"].as_i64().unwrap_or_default().to_string(),
+            };
+            self.system_message(Text::tr(key, &[&detail]));
         } else {
             let error = reply["error"].as_str().unwrap_or("unknown error");
             self.system_message(Text::tr("horizon.cinematix.error", &[&error]));
@@ -360,6 +376,54 @@ impl Game<'_> {
                 self.cinematix.fit();
                 let (t0, t1) = self.cinematix.window();
                 Ok(Some(json!({ "ok": true, "window": [t0, t1] })))
+            }
+            "save" => {
+                let path = words
+                    .get(1)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(film_path);
+                let stamp = cinematix_editor::Stamp {
+                    app_version: env!("CARGO_PKG_VERSION"),
+                    saved_unix: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or_default(),
+                };
+                match cinematix_editor::save(&path, &self.cinematix.doc, stamp) {
+                    Ok(()) => Ok(Some(json!({
+                        "ok": true, "path": path.display().to_string(),
+                        "channels": self.cinematix.doc.channels.len(),
+                        "keys": self.cinematix.doc.key_count(),
+                    }))),
+                    Err(error) => Ok(Some(json!({ "ok": false, "error": error }))),
+                }
+            }
+            "load" => {
+                let Some(path) = words.get(1).map(std::path::PathBuf::from) else {
+                    return Ok(Some(json!({ "ok": false, "error": "load needs a path" })));
+                };
+                match cinematix_editor::load(&path) {
+                    Ok(doc) => {
+                        let keys = doc.key_count();
+                        let channels = doc.channels.len();
+                        self.cinematix.adopt_document(doc);
+                        Ok(Some(json!({
+                            "ok": true, "path": path.display().to_string(),
+                            "channels": channels, "keys": keys,
+                        })))
+                    }
+                    Err(error) => Ok(Some(json!({ "ok": false, "error": error }))),
+                }
+            }
+            "new" => {
+                self.cinematix.adopt_document(cinematix_editor::Document::new());
+                if self.cinematix_open() {
+                    let eye = self.view.eye;
+                    let position =
+                        Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
+                    self.cinematix.take_pose(position, self.yaw, self.pitch, false);
+                }
+                Ok(Some(json!({ "ok": true, "channels": self.cinematix.doc.channels.len() })))
             }
             "camera" => match words.get(1).copied() {
                 Some("player") => {

@@ -34,7 +34,7 @@ restoring everything.
 | Viewport: live world + editor camera | done — the film camera renders while the screen is open; WASD/E/Q fly, right-drag look, FOV live |
 | Timeline: ruler, playhead, key rows, transport | done — drawn, scrubbable, keys move in time |
 | Channel list and key insertion/deletion | done — `Document`, `K`, `X`, `Delete`, rows |
-| Save/load the film (`.cmx`) | todo — the document is in memory only; closing the screen keeps it |
+| Save/load the film (`.cmx`) | done — zip with `project.toml` + `scene.json`; `cinematix save [PATH]`, `load PATH`, `new`; fixture tests for newer formats and bad targets |
 
 Verified: `cargo test -p cinematix-editor` 25 pass; `cargo check -p horizon-client` clean. Headless:
 F8 opened the screen (status `open: true, screen: "cinematix"`), the frame went to 48, a key was
@@ -49,6 +49,13 @@ eye (`-4.5 66.615 6.5`, yaw 0, pitch 0, fov 70); holding W for one second moved 
 (8.07 m at 8 m/s); `cinematix camera player` put it back at z 6.5; `set field-of-view 0.5` moved
 the registered slider and `cinematix status` then reported fov 90, with the screenshot visibly
 wider. The player's eye, yaw and pitch were identical before and after the session.
+
+Film file, verified headless across two game processes: `cinematix save /tmp/session.cmx` wrote a
+918-byte zip (`project.toml` format 1, `app_version 0.1.0`, `scene.json` with 10 channels and one
+key); a second world loaded it, reported one key and the camera at the saved pose
+(`8.5 72.619 8.5`); `cinematix new` reset to zero keys and adopted the new player's eye
+(`72.5 68.62 41.5`); loading and saving again produced a 913-byte zip. `cinematix save` with no
+path wrote to `<player dir>/cinematix/film.cmx`.
 
 
 ## Phase 3 — timeline and animation

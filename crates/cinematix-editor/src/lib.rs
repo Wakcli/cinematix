@@ -5,6 +5,7 @@
 mod document;
 mod draw;
 mod editor;
+mod film;
 mod frame;
 
 pub use cinematix_ui::{Mods, Rect};
@@ -13,4 +14,5 @@ pub use document::{
 };
 pub use draw::draw;
 pub use editor::{Button, Editor, EditorKey, Field, KeyResult, Section, fields_for};
+pub use film::{EXTENSION, FORMAT_VERSION, Stamp, load, save};
 pub use frame::{Frame, GUTTER_W, ROW_H};

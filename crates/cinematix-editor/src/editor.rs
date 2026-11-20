@@ -791,6 +791,20 @@ impl Editor {
         Some((position.to_array(), yaw, pitch, self.preview_fov()))
     }
 
+    /// Replaces the film after a load or a new document: the playhead and the window follow the
+    /// new range, and no selection points into the old channels.
+    pub fn adopt_document(&mut self, doc: Document) {
+        self.doc = doc;
+        let (r0, r1) = self.doc.scene.meta.range;
+        self.playhead.fps = self.doc.scene.meta.fps.round().max(1.0);
+        self.seek(self.playhead.t.clamp(r0.min(r1), r0.max(r1)));
+        self.fit();
+        self.selected_channel = None;
+        self.selected_key = None;
+        self.selected_node = None;
+        self.scroll = 0;
+    }
+
     /// The channels that hold at least one key, for the film summary.
     pub fn keyed_channels(&self) -> usize {
         self.doc

@@ -199,6 +199,11 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
             max: 86_400.0,
         },
     );
+    let save = literal(&mut d, root, "save");
+    argument(&mut d, save, "path", ArgType::Greedy);
+    let load = literal(&mut d, root, "load");
+    argument(&mut d, load, "path", ArgType::Greedy);
+    literal(&mut d, root, "new");
     let camera = literal(&mut d, root, "camera");
     literal(&mut d, camera, "player");
     let section = literal(&mut d, root, "section");

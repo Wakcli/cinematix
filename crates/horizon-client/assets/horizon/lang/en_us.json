@@ -1390,5 +1390,8 @@
   "horizon.cinematix.key_deleted": "Key deleted.",
   "horizon.cinematix.seeked": "Playhead at frame %s.",
   "horizon.cinematix.status": "Cinematix: frame %s.",
-  "horizon.cinematix.error": "Cinematix: %s"
+  "horizon.cinematix.error": "Cinematix: %s",
+  "horizon.cinematix.saved": "Film saved to %s.",
+  "horizon.cinematix.loaded": "Film loaded from %s.",
+  "horizon.cinematix.new": "New film."
 }

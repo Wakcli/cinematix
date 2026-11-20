@@ -217,6 +217,13 @@ project.toml      format version, app version, timestamps
 JSON for mergeability and because agents must be able to read it. Blobs addressed by content hash
 for dedupe and integrity. `format_version` plus an explicit upcast chain, tested with fixtures.
 
+Implemented in `crates/cinematix-editor/src/film.rs`: `project.toml` (`format_version`, `app`,
+`app_version`, `saved_unix`) and `scene.json` (the `Scene`, every `Channel`). Save/load is reachable
+as `cinematix save [PATH]`, `cinematix load PATH` and `cinematix new`, in chat and through
+`horizon-ctl`. A file from a newer format is refused with its version; a channel whose node or
+property does not exist is refused rather than silently dropped. `assets/` and `thumb.png` are
+reserved in the container and not written yet: there are no assets or renders to put in them.
+
 ## 11. Documentation layout
 
 Upstream Horizon already owns `docs/architecture.md`, `docs/ui-kit.md` and the rest of `docs/`.
