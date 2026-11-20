@@ -25,13 +25,25 @@ restoring everything.
 
 | Item | Status |
 |---|---|
-| `cinematix-editor` crate, `Screen` variant, key binding | todo |
-| Editor lifecycle: open, close, cursor, input restoration | todo |
-| Icon rail | todo |
-| Dock tree and panel widget | partial — dock logic exists in `cinematix-ui`, drawing todo |
+| `cinematix-editor` crate, `Screen` variant, key binding | done — 25 tests; `Screen::Cinematix`, F8, `/cinematix` |
+| Editor lifecycle: open, close, cursor, input restoration | done — `game/interface/cinematix.rs`; verified headless |
+| Icon rail | done — eight sections, drawn and hit-tested |
+| Dock tree and panel widget | partial — dock logic exists in `cinematix-ui`; the inspector is a fixed column, not dockable |
 | Overlay card, context menu | todo |
-| Numeric scrubber | partial — interaction logic exists, drawing todo |
-| Viewport: live world + editor camera | todo — `StudioFreecam` exists to reuse |
+| Numeric scrubber | done — drawn with a track; drag with Shift ×10 and Ctrl ÷10 |
+| Viewport: live world + editor camera | partial — the editor draws over the live world; its own camera control is the next slice |
+| Timeline: ruler, playhead, key rows, transport | done — drawn, scrubbable, keys move in time |
+| Channel list and key insertion/deletion | done — `Document`, `K`, `X`, `Delete`, rows |
+| Save/load the film (`.cmx`) | todo — the document is in memory only; closing the screen keeps it |
+
+Verified: `cargo test -p cinematix-editor` 25 pass; `cargo check -p horizon-client` clean. Headless:
+F8 opened the screen (status `open: true, screen: "cinematix"`), the frame went to 48, a key was
+inserted and drawn at the playhead, `ui` listed the eight rail buttons and the five sliders by id,
+`screenshot` wrote 956x1032, Escape returned `screen: "playing"`, and typed `/cinematix status`
+answered `Cinematix: frame 48.` in chat. A second session compared `state` before and after:
+position, yaw, pitch and eye identical; `pointer_grabbed` true -> false -> true; `ticks` 30 -> 112
+(the world kept running, as designed); the HUD is absent from the screenshot.
+
 
 ## Phase 3 — timeline and animation
 

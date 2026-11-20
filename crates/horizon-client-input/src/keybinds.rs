@@ -80,6 +80,8 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
 pub const HORIZON_MAPPINGS: &[(&str, &str, &str)] = &[
     // The emote wheel (docs/cosmetics.md), on a key vanilla leaves free.
     ("key.emote", "key.keyboard.b", "multiplayer"),
+    // Cinematix's editor (docs/cinematix/), on a key vanilla leaves free.
+    ("key.cinematix", "key.keyboard.f8", "misc"),
 ];
 /// Every mapping the game binds: vanilla's in `Options.keyMappings` order, then Horizon's.
 pub fn all_mappings() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {

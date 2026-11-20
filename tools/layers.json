@@ -100,7 +100,13 @@
     "horizon-telemetry": "horizon",
     "horizon-telemetry-server": "horizon",
     "horizon-mod-vocab": "engine",
-    "horizon-engine-slots": "engine"
+    "horizon-engine-slots": "engine",
+    "cinematix-scene": "engine",
+    "cinematix-anim": "engine",
+    "cinematix-ui": "engine",
+    "cinematix-timeline": "engine",
+    "cinematix-render": "engine",
+    "cinematix-editor": "engine"
   },
   "portable": {
     "_doc": "docs/layers.md#engine: vanilla's rules and data with no desktop in them, which a port builds on. They depend only on each other, and never on a forbidden library.",
@@ -128,7 +134,9 @@
     ],
     "pending": {
       "_doc": "Engine crates that still take a non-portable crate, until the types they need move down. Entries only go away.",
-      "horizon-gameplay": ["horizon-client-lib"]
+      "horizon-gameplay": [
+        "horizon-client-lib"
+      ]
     },
     "forbidden": [
       "arboard",

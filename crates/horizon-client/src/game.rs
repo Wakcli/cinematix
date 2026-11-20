@@ -269,6 +269,9 @@ enum Screen {
     /// Horizon Studio script screen (`studio_screen_open`): canvas draws
     /// itself, takes input through the screen hooks, does not draw chat.
     Studio,
+    /// Cinematix's editor (game/interface/cinematix.rs): the film's camera,
+    /// lights and timeline, drawn over the world it keeps framing.
+    Cinematix,
 }
 impl Screen {
     /// The id native mods see for this screen (`ScreenView.id`, the
@@ -300,6 +303,7 @@ impl Screen {
             Screen::Mod => "mod",
             Screen::HudEditor => "hud_editor",
             Screen::Studio => "studio",
+            Screen::Cinematix => "cinematix",
         }
     }
 }
@@ -1760,6 +1764,8 @@ struct Game<'a> {
     /// Replay playback (game/replay.rs), and Horizon Studio's editor on it (game/studio.rs).
     pub(super) replay: replay::Replay,
     pub(super) studio: studio::Studio,
+    /// Cinematix's film document and editor state (game/interface/cinematix.rs).
+    pub(super) cinematix: cinematix_editor::Editor,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
@@ -4774,7 +4780,10 @@ impl Game<'_> {
             self.native_render_gui_pre(&mut gui_canceled);
         }
         // RenderGuiEvent.Pre: a mod's cancel hides the HUD as F1 does.
-        let show_hud = !self.ui.hide_gui && !gui_canceled && !self.replay.playing();
+        let show_hud = !self.ui.hide_gui
+            && !gui_canceled
+            && !self.replay.playing()
+            && self.screen != Screen::Cinematix;
         // Hud.extractRenderState asks `Screen.isInGameUi` twice: such a screen
         // defers the subtitles over itself, and keeps them while F1 hides the
         // rest of the HUD.
@@ -5111,6 +5120,7 @@ impl Game<'_> {
                     horizon_client::screen_draw::RenderPhase::Foreground,
                 );
             }
+            Screen::Cinematix => self.draw_cinematix(&mut batch),
             Screen::Inventory => {
                 let from = batch.vertices.len();
                 self.draw_inventory(&mut batch);
@@ -9277,6 +9287,9 @@ impl Game<'_> {
                         );
                         let previous = self.cursor;
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
+                        if self.cinematix_mouse_dragged() {
+                            return Ok(());
+                        }
                         if self.studio_mouse_dragged(b.width) {
                             return Ok(());
                         }
@@ -9347,6 +9360,10 @@ impl Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
+                    if self.screen == Screen::Cinematix {
+                        self.cinematix_wheel(d, self.modifiers.control_key());
+                        return Ok(());
+                    }
                     // ScreenEvent.MouseScrolled.Pre: the open screen hears of
                     // the wheel before anything scrolls, and a cancelled turn
                     // scrolls nothing — no bundle, no list, slider or
@@ -9600,6 +9617,9 @@ impl Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    if self.cinematix_mouse_input(pressed, button) {
+                        return Ok(());
+                    }
                     if self.studio_mouse_input(pressed, button) {
                         return Ok(());
                     }
@@ -10090,6 +10110,7 @@ impl Game<'_> {
                     self.previous = now;
                     self.upload_pace.frame(elapsed);
                     self.studio_fly(elapsed);
+                    self.cinematix_tick(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
                     // other screens use the same keys for their own navigation.
                     if self.screen == Screen::Playing
@@ -10888,6 +10909,7 @@ impl<'a> Game<'a> {
             realm_session: false,
             replay: Default::default(),
             studio: Default::default(),
+            cinematix: Default::default(),
             lan: None,
             integrated: None,
             level_shapes: Default::default(),

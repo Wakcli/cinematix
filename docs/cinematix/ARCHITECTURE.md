@@ -75,19 +75,28 @@ Upstream rules that apply to all Cinematix code: architecture layers
 
 ## 4. Editor activation and editing mode
 
-Activation is a key binding in `horizon-client-input/src/keybinds.rs`, plus an entry where Horizon
-already lists its own screens. Opening pushes the editor screen; closing restores the previous
-screen, cursor capture and input state.
+Implemented in `game/interface/cinematix.rs` on top of `crates/cinematix-editor`.
 
-Editing mode must do exactly four things, and the audit found the hook for each:
+Activation is `key.cinematix` (F8, `horizon-client-input/src/keybinds.rs`, one row in
+`HORIZON_MAPPINGS`), `/cinematix open` in chat, and `horizon-ctl cinematix open`. The gate is the
+same shape as Studio's (`cinematix_screen_opens`): it opens only over `Screen::Playing` with a
+loaded world and a player, answers `true` when already open, and refuses every other screen.
 
-1. **Route input to the editor.** The screen has focus, so gameplay key handling is bypassed as it
-   already is for any open screen.
-2. **Stop gameplay movement.** Suppress the movement path, not the world.
-3. **Keep the editor camera independent.** `StudioFreecam` already holds a detached camera with its
-   own position and angles; the player entity is never moved.
-4. **Control the clock.** Authoring scrubs on a timeline clock; the world tick is frozen or stepped.
-   `HORIZON_STILL` already establishes frozen-world semantics.
+While it is open:
+
+1. **Input is the editor's.** `key_pressed` hands every key to `cinematix_key` before the gameplay
+   mappings; mouse press, release, drag and the wheel are taken by `cinematix_mouse_input`,
+   `cinematix_mouse_dragged` and `cinematix_wheel`; a click can never reach block breaking.
+2. **The world keeps running.** `Screen::Cinematix.is_pause_screen()` is false, as for Studio and
+   the emote wheel. Freezing the world for authoring is a later, deliberate feature.
+3. **The HUD is hidden.** `draw_hud`'s `show_hud` excludes `Screen::Cinematix`, so the hotbar and
+   crosshair do not sit under the viewport.
+4. **Closing restores play.** Escape or F8 calls `close_cinematix_screen`: `Screen::Playing`,
+   `capture(true)`. The `cinematix_editor::Editor` (and so the film) stays in `Game`, not in the
+   screen, so closing and reopening the screen keeps the document.
+
+The editor camera is still the player's own view: the viewport draws the live world behind the
+panels. `StudioFreecam` is the intended reuse for a detached camera, and is the next slice.
 
 The player's position, rotation and camera must survive a full editor session unchanged. That is a
 test, not an intention.

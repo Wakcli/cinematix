@@ -632,6 +632,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cinematix-editor"
+version = "0.1.0"
+dependencies = [
+ "cinematix-anim",
+ "cinematix-scene",
+ "cinematix-timeline",
+ "cinematix-ui",
+ "glam",
+ "horizon-client-render",
+]
+
+[[package]]
 name = "cinematix-render"
 version = "0.1.0"
 dependencies = [
@@ -1861,6 +1873,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "chrono",
+ "cinematix-editor",
  "crc32fast",
  "flate2",
  "fs4",

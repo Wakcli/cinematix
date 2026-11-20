@@ -1,0 +1,509 @@
+use crate::document::{kind_key, prop_key};
+use crate::editor::{Editor, Field, Section};
+use crate::frame::{Frame, GUTTER_W, Row};
+use cinematix_scene::NodeKind;
+use cinematix_ui::Rect;
+use horizon_client_render::hud::{HudAtlas, HudBatch, rgba};
+use horizon_client_render::text::Text;
+use horizon_client_render::ui;
+
+const HEADER_BG: u32 = rgba(14, 15, 18, 240);
+const RAIL_BG: u32 = rgba(19, 20, 24, 240);
+const PANEL_BG: u32 = rgba(22, 23, 28, 232);
+const ROW_ALT: u32 = rgba(28, 29, 35, 200);
+const LINE: u32 = rgba(56, 60, 72, 255);
+const TEXT: u32 = rgba(226, 228, 234, 255);
+const DIM: u32 = rgba(139, 143, 156, 255);
+const FAINT: u32 = rgba(96, 100, 112, 255);
+const ACCENT: u32 = rgba(92, 156, 255, 255);
+const KEY: u32 = rgba(245, 246, 250, 255);
+
+fn fill(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, colour: u32) {
+    if r.w <= 0.0 || r.h <= 0.0 {
+        return;
+    }
+    batch.fill(atlas, r.x, r.y, r.w, r.h, colour);
+}
+
+fn text(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, t: &Text, colour: u32) {
+    ui::text_scaled(batch, atlas, t, x, y, 1.0, colour);
+}
+
+fn tr(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, key: &str, colour: u32) {
+    text(batch, atlas, x, y, &Text::translate(key, &[]), colour);
+}
+
+fn right_text(batch: &mut HudBatch, atlas: &HudAtlas, right: f32, y: f32, t: &Text, colour: u32) {
+    let w = HudBatch::text_width(atlas, &t.plain());
+    text(batch, atlas, right - w, y, t, colour);
+}
+
+fn button(batch: &mut HudBatch, atlas: &HudAtlas, r: Rect, label: &Text, cursor: (f32, f32)) {
+    let hover = r.contains(cursor.0, cursor.1);
+    ui::button(batch, atlas, r.x, r.y, r.w, r.h, label, true, hover);
+}
+
+pub fn draw(ed: &Editor, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+    let f = ed.frame();
+    draw_header(ed, &f, batch, atlas);
+    draw_rail(ed, &f, batch, atlas, cursor);
+    draw_inspector(ed, &f, batch, atlas, cursor);
+    draw_timeline(ed, &f, batch, atlas, cursor);
+}
+
+fn draw_header(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    fill(batch, atlas, f.header, HEADER_BG);
+    batch.fill(
+        atlas,
+        f.header.x,
+        f.header.y + f.header.h - 1.0,
+        f.header.w,
+        1.0,
+        LINE,
+    );
+    text(
+        batch,
+        atlas,
+        f.header.x + 8.0,
+        f.header.y + 8.0,
+        &Text::translate("cinematix.screen.title", &[]),
+        TEXT,
+    );
+
+    let fps = ed.fps();
+    let frame = Text::tr("cinematix.header.frame", &[&ed.frame_number()]);
+    let time = Text::tr("cinematix.header.time", &[&format!("{:.2}", ed.time())]);
+    let rate = Text::tr("cinematix.header.fps", &[&format!("{fps:.0}")]);
+    let mut right = f.header.x + f.header.w - 8.0;
+    for t in [rate, time, frame] {
+        let w = HudBatch::text_width(atlas, &t.plain());
+        let x = right - w;
+        text(batch, atlas, x, f.header.y + 8.0, &t, DIM);
+        right = x - 14.0;
+    }
+
+    if let Some(status) = ed.status {
+        let w = HudBatch::text_width(atlas, &Text::translate(status, &[]).plain());
+        let x = f.header.x + (f.header.w - w) * 0.5;
+        if x > right {
+            tr(batch, atlas, x, f.header.y + 8.0, status, ACCENT);
+        }
+    }
+}
+
+fn draw_rail(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+    fill(batch, atlas, f.rail, RAIL_BG);
+    batch.fill(
+        atlas,
+        f.rail.x + f.rail.w - 1.0,
+        f.rail.y,
+        1.0,
+        f.rail.h,
+        LINE,
+    );
+    for (section, r) in &f.rail_items {
+        let label = Text::translate(section.short_key(), &[]);
+        button(batch, atlas, *r, &label, cursor);
+        if ed.section == *section {
+            batch.fill(atlas, r.x - 2.0, r.y + 3.0, 2.0, r.h - 6.0, ACCENT);
+        }
+    }
+}
+
+fn draw_inspector(
+    ed: &Editor,
+    f: &Frame,
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+) {
+    fill(batch, atlas, f.inspector, PANEL_BG);
+    batch.fill(
+        atlas,
+        f.inspector.x,
+        f.inspector.y,
+        1.0,
+        f.inspector.h,
+        LINE,
+    );
+    let x = f.inspector.x + 6.0;
+    let y = f.inspector.y + 8.0;
+    text(
+        batch,
+        atlas,
+        x,
+        y,
+        &Text::translate(ed.section.key(), &[]),
+        ACCENT,
+    );
+    batch.fill(atlas, x, y + 13.0, f.inspector.w - 12.0, 1.0, LINE);
+
+    for (field, r) in &f.fields {
+        draw_field(ed, *field, *r, batch, atlas, cursor);
+    }
+
+    for (id, r) in &f.list {
+        if ed.selected_node == Some(*id) {
+            fill(batch, atlas, *r, ROW_ALT);
+        }
+        let name = match ed.doc.node(*id) {
+            Some(n) if !n.name.is_empty() => Text::literal(n.name.clone()),
+            Some(n) => Text::translate(kind_key(&n.kind), &[]),
+            None => Text::literal(String::new()),
+        };
+        text(batch, atlas, r.x + 4.0, r.y + 4.0, &name, TEXT);
+    }
+
+    draw_summary(ed, f, batch, atlas);
+}
+
+fn draw_field(
+    ed: &Editor,
+    field: Field,
+    r: Rect,
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+) {
+    let (min, max, _) = field.range();
+    let v = field.get(&ed.doc).clamp(min, max);
+    let frac = if (max - min).abs() < f64::EPSILON {
+        0.0
+    } else {
+        ((v - min) / (max - min)) as f32
+    };
+    let label = Text::translate(field.label(), &[])
+        .append(Text::literal(format!(": {}", field.text(&ed.doc))));
+    ui::slider(
+        batch,
+        atlas,
+        r.x,
+        r.y,
+        r.w,
+        &label,
+        frac,
+        r.contains(cursor.0, cursor.1),
+        true,
+        ed.dragging_field(field),
+    );
+}
+
+fn draw_summary(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    let x = f.inspector.x + 6.0;
+    let bottom = f.inspector.y + f.inspector.h - 8.0;
+    let line_h = 12.0;
+    let mut rows: Vec<Text> = Vec::new();
+    match ed.section {
+        Section::Camera => {
+            if let Some(t) = ed.doc.camera_transform() {
+                rows.push(Text::tr(
+                    "cinematix.summary.position",
+                    &[
+                        &format!("{:.2}", t.translation.x),
+                        &format!("{:.2}", t.translation.y),
+                        &format!("{:.2}", t.translation.z),
+                    ],
+                ));
+            }
+            rows.push(Text::tr(
+                "cinematix.summary.channels",
+                &[&ed.doc.channels.len()],
+            ));
+        }
+        Section::Actors => rows.push(Text::tr(
+            "cinematix.summary.nodes",
+            &[&ed.doc.nodes_of(|k| matches!(k, NodeKind::Actor(_))).len()],
+        )),
+        Section::Models => rows.push(Text::tr(
+            "cinematix.summary.nodes",
+            &[&ed.doc.nodes_of(|k| matches!(k, NodeKind::Mesh(_))).len()],
+        )),
+        Section::Lights => rows.push(Text::tr(
+            "cinematix.summary.nodes",
+            &[&ed.doc.nodes_of(|k| matches!(k, NodeKind::Light(_))).len()],
+        )),
+        Section::World => {
+            rows.push(Text::tr(
+                "cinematix.summary.ops",
+                &[&ed.doc.scene.world.len()],
+            ));
+            let mut chunks: Vec<(i32, i32)> = ed.doc.scene.world.chunk_keys().collect();
+            chunks.sort();
+            chunks.dedup();
+            rows.push(Text::tr("cinematix.summary.chunks", &[&chunks.len()]));
+        }
+        Section::Film => {
+            rows.push(Text::tr(
+                "cinematix.summary.channels",
+                &[&ed.doc.channels.len()],
+            ));
+            rows.push(Text::tr("cinematix.summary.keyed", &[&ed.keyed_channels()]));
+            rows.push(Text::tr("cinematix.summary.keys", &[&ed.doc.key_count()]));
+            let (r0, r1) = ed.range();
+            rows.push(Text::tr(
+                "cinematix.summary.range",
+                &[&format!("{r0:.2}"), &format!("{r1:.2}")],
+            ));
+        }
+        Section::Render => {
+            let (w, h) = ed.doc.scene.meta.resolution;
+            rows.push(Text::tr("cinematix.summary.resolution", &[&w, &h]));
+            rows.push(Text::tr("cinematix.summary.keys", &[&ed.doc.key_count()]));
+        }
+        Section::Project => {
+            rows.push(Text::tr(
+                "cinematix.summary.nodes",
+                &[&ed.doc.scene.nodes.len()],
+            ));
+            rows.push(Text::tr(
+                "cinematix.summary.assets",
+                &[&ed.doc.scene.assets.len()],
+            ));
+            rows.push(Text::tr(
+                "cinematix.summary.channels",
+                &[&ed.doc.channels.len()],
+            ));
+        }
+    }
+    let mut y = bottom - rows.len() as f32 * line_h;
+    for t in rows {
+        if y < f.inspector.y + 8.0 {
+            break;
+        }
+        text(batch, atlas, x, y, &t, DIM);
+        y += line_h;
+    }
+}
+
+fn draw_timeline(
+    ed: &Editor,
+    f: &Frame,
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+) {
+    fill(batch, atlas, f.timeline, PANEL_BG);
+    batch.fill(atlas, f.timeline.x, f.timeline.y, f.timeline.w, 1.0, LINE);
+
+    text(
+        batch,
+        atlas,
+        f.timeline.x + 6.0,
+        f.timeline.y + 6.0,
+        &Text::translate("cinematix.timeline.channels", &[]),
+        DIM,
+    );
+    let count = Text::tr("cinematix.summary.channels", &[&ed.doc.channels.len()]);
+    right_text(
+        batch,
+        atlas,
+        f.timeline.x + GUTTER_W - 6.0,
+        f.timeline.y + 6.0,
+        &count,
+        FAINT,
+    );
+
+    draw_ruler(ed, f, batch, atlas);
+    draw_rows(ed, f, batch, atlas);
+    draw_playhead(ed, f, batch, atlas);
+    draw_transport(ed, f, batch, atlas, cursor);
+}
+
+fn draw_ruler(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    let (t0, t1) = f.axis.visible();
+    let pps = f.axis.px_per_sec();
+    let steps = [
+        1.0 / 24.0,
+        1.0 / 12.0,
+        0.25,
+        0.5,
+        1.0,
+        2.0,
+        5.0,
+        10.0,
+        30.0,
+        60.0,
+    ];
+    let step = steps
+        .iter()
+        .copied()
+        .find(|s| s * pps >= 48.0)
+        .unwrap_or(60.0);
+    let fps = f64::from(ed.fps());
+    let mut t = (t0 / step).floor() * step;
+    let mut drawn = 0;
+    while t <= t1 && drawn < 512 {
+        let x = f.axis.x(t);
+        if x >= f.ruler.x {
+            batch.fill(atlas, x, f.ruler.y, 1.0, 5.0, FAINT);
+            let frame = (t * fps).round() as i64;
+            let label = Text::literal(format!("{frame}"));
+            let w = HudBatch::text_width(atlas, &label.plain());
+            if x + 2.0 + w <= f.ruler.x + f.ruler.w {
+                text(batch, atlas, x + 2.0, f.ruler.y + 6.0, &label, FAINT);
+            }
+        }
+        t += step;
+        drawn += 1;
+    }
+    batch.fill(
+        atlas,
+        f.ruler.x,
+        f.ruler.y + f.ruler.h - 1.0,
+        f.ruler.w,
+        1.0,
+        LINE,
+    );
+}
+
+fn draw_rows(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    for (i, row) in f.rows.iter().enumerate() {
+        let band = Rect::new(f.lanes.x, row.label.y, f.lanes.w, row.label.h);
+        if i % 2 == 1 {
+            fill(batch, atlas, band, ROW_ALT);
+        }
+        draw_row_label(ed, row, batch, atlas);
+        draw_keys(ed, f, row, batch, atlas);
+    }
+}
+
+fn draw_row_label(ed: &Editor, row: &Row, batch: &mut HudBatch, atlas: &HudAtlas) {
+    let Some(ch) = ed.doc.channel(row.chan) else {
+        return;
+    };
+    let name = match ed.doc.node(ch.target.node) {
+        Some(n) if !n.name.is_empty() => Text::literal(n.name.clone()),
+        Some(n) => Text::translate(kind_key(&n.kind), &[]),
+        None => Text::literal(String::new()),
+    };
+    let label = Text::translate(
+        "cinematix.row.channel",
+        &[name, Text::translate(prop_key(ch.target.prop), &[])],
+    );
+    let colour = if ed.selected_channel == Some(row.chan) {
+        TEXT
+    } else if ch.keys.is_empty() {
+        FAINT
+    } else {
+        DIM
+    };
+    text(
+        batch,
+        atlas,
+        row.label.x + 6.0,
+        row.label.y + 4.0,
+        &label,
+        colour,
+    );
+    if ed.selected_channel == Some(row.chan) {
+        batch.fill(atlas, row.label.x, row.label.y, 2.0, row.label.h, ACCENT);
+    }
+}
+
+fn draw_keys(ed: &Editor, f: &Frame, row: &Row, batch: &mut HudBatch, atlas: &HudAtlas) {
+    let Some(ch) = ed.doc.channel(row.chan) else {
+        return;
+    };
+    let cy = row.keys.y + row.keys.h * 0.5;
+    for (ki, k) in ch.keys.iter().enumerate() {
+        let x = f.axis.x(k.t);
+        if x < row.keys.x - 4.0 || x > row.keys.x + row.keys.w + 4.0 {
+            continue;
+        }
+        let selected = ed.selected_key == Some((row.chan, ki));
+        let colour = if selected { ACCENT } else { KEY };
+        let r = if selected { 5.0 } else { 4.0 };
+        batch.fill_quad(
+            atlas,
+            [[x, cy - r], [x + r, cy], [x, cy + r], [x - r, cy]],
+            colour,
+        );
+    }
+}
+
+fn draw_playhead(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    let x = f.axis.x(ed.time());
+    if x < f.ruler.x || x > f.ruler.x + f.ruler.w {
+        return;
+    }
+    let top = f.ruler.y;
+    let bottom = f.lanes.y + f.lanes.h;
+    if bottom <= top {
+        return;
+    }
+    batch.fill(atlas, x, top, 1.0, bottom - top, ACCENT);
+    batch.fill_quad(
+        atlas,
+        [
+            [x - 4.0, top],
+            [x + 4.0, top],
+            [x, top + 6.0],
+            [x, top + 6.0],
+        ],
+        ACCENT,
+    );
+}
+
+fn draw_transport(
+    ed: &Editor,
+    f: &Frame,
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+) {
+    batch.fill(
+        atlas,
+        f.transport.x,
+        f.transport.y,
+        f.transport.w,
+        1.0,
+        LINE,
+    );
+    for (b, r) in &f.buttons {
+        let label = Text::literal(b.face(ed.playing));
+        button(batch, atlas, *r, &label, cursor);
+    }
+    let last = f
+        .buttons
+        .last()
+        .map(|(_, r)| r.x + r.w)
+        .unwrap_or(f.transport.x);
+    let y = f.transport.y + 8.0;
+    let frame = Text::tr("cinematix.header.frame", &[&ed.frame_number()]);
+    let time = Text::tr("cinematix.header.time", &[&format!("{:.2}", ed.time())]);
+    let right = f.transport.x + f.transport.w - 8.0;
+    let time_w = HudBatch::text_width(atlas, &time.plain());
+    let frame_w = HudBatch::text_width(atlas, &frame.plain());
+    let left = last + 12.0;
+    if left + time_w <= right {
+        text(batch, atlas, right - time_w, y, &time, DIM);
+        if left + frame_w + 12.0 <= right - time_w {
+            text(batch, atlas, left, y, &frame, TEXT);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_field_has_a_translation_key_and_a_bounded_range() {
+        for section in Section::ALL {
+            for f in crate::editor::fields_for(section) {
+                assert!(f.label().starts_with("cinematix."));
+                let (min, max, step) = f.range();
+                assert!(min < max);
+                assert!(step > 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn every_section_has_a_full_and_a_short_translation_key() {
+        for s in Section::ALL {
+            assert!(s.key().starts_with("cinematix.section."));
+            assert!(s.short_key().ends_with(".short"));
+        }
+    }
+}

@@ -1,0 +1,16 @@
+//! Cinematix's in-game editor: the document, the frame layout and the drawing. The engine-facing
+//! glue (the `Screen` variant, input routing and the control socket) lives in `horizon-client`;
+//! everything here is testable with `cargo test` and no GPU.
+
+mod document;
+mod draw;
+mod editor;
+mod frame;
+
+pub use cinematix_ui::{Mods, Rect};
+pub use document::{
+    Document, camera_data, key_light_data, kind_key, new_node, prop_key, props_of, rest_value,
+};
+pub use draw::draw;
+pub use editor::{Button, Editor, EditorKey, Field, KeyResult, Section, fields_for};
+pub use frame::{Frame, GUTTER_W, ROW_H};

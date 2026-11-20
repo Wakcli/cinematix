@@ -6,25 +6,49 @@ change behaviour.
 
 Baseline: `1664a35852`, 2026-11-19. Imported 2026-11-20.
 
+## Phase 1 — import
+
 | File | Change | Lines |
 |---|---|---|
-| `Cargo.toml` | five `crates/cinematix-*` entries added to `members` | +5 |
+| `Cargo.toml` | six `crates/cinematix-*` entries added to `members` | +6 |
 | `.gitignore` | unchanged | 0 |
 
-Nothing else in the Horizon tree has been modified. New behaviour lives in `crates/cinematix-*`
-until Phase 2 needs a `Screen` variant, a key binding and an input hook.
+## Phase 2 — the editor screen
 
-When those land they are recorded here as, for example:
+The editor's own code lives in `crates/cinematix-editor`; the Horizon tree only gains the screen
+slot and the dispatch that reaches it. Every hook is one arm in an existing `match`, so an
+upstream merge shows up as a conflict on that arm, not as silent drift.
 
 | File | Change | Lines |
 |---|---|---|
-| `crates/horizon-client/src/game.rs` | `Screen::Cinematix` variant dispatch; one match arm | ~8 |
-| `crates/horizon-client-input/src/keybinds.rs` | one binding row | 1 |
-| `crates/horizon-client/Cargo.toml` | optional `cinematix-editor` dependency behind a feature | 2 |
+| `crates/horizon-client/src/game.rs` | `Screen::Cinematix` variant, id, `Game` field, draw arm, HUD gate, cursor/wheel/key/tick hooks | +23 −1 |
+| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, `/cinematix`, ctl | +353 (new) |
+| `crates/horizon-client/src/game/interface/screens.rs` | `is_pause_screen`, `blurs_background` arms and their tests | +7 −4 |
+| `crates/horizon-client/src/game/interface/play_keys.rs` | F8 opens; Escape closes; keys stop at the editor | +9 |
+| `crates/horizon-client/src/game/interface/chat.rs` | `/cinematix` suggestion grammar | +67 −1 |
+| `crates/horizon-client/src/game/interface/debug_options.rs` | F3+F6 does not interrupt the editor | +1 |
+| `crates/horizon-client/src/game/runtime/control.rs` | `cinematix` ctl dispatch, HELP, screen name; F7-F10 in the `key` parser | +11 |
+| `crates/horizon-client/src/game/runtime/agent/mod.rs` | screen name | +1 |
+| `crates/horizon-client/src/game/runtime/core_tests.rs` | the screen-id list and its uniqueness test | +1 |
+| `crates/horizon-client/src/game/network/remote/mod.rs` | `/cinematix` reaches `cinematix_command` | +3 |
+| `crates/horizon-client/src/bin/horizon-ctl/commands.rs` | the `cinematix` command in `horizon-ctl help` | +5 |
+| `crates/horizon-client-input/src/keybinds.rs` | `key.cinematix` = F8 (`misc`) | +2 |
+| `crates/horizon-client-input/src/actions.rs` | `Cinematix` action | +1 |
+| `crates/horizon-client/Cargo.toml` | `cinematix-editor` dependency | +1 |
+| `crates/horizon-client/assets/horizon/lang/en_us.json` | 65 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +66 −1 |
+| `tools/layers.json` | six `cinematix-*` crates at `engine` | +10 −2 |
 
-Rules for additions to this file:
+Deliberate deviations from the rules above:
 
-- A patch stays under roughly 50 lines. If it grows past that, the integration point is wrong and
-  the design should change instead.
-- New behaviour goes behind a cargo feature so an upstream merge is mechanical.
-- Every patch has a test or a harness that fails loudly if the merge moves the hook.
+- **No cargo feature.** Cinematix is not an optional extra in this fork: the screen, the key and
+  the editor crate are always compiled. A feature would hide the code from `horizon-plain` builds
+  and add a second configuration to test for no gain. The dependency is one line, so an upstream
+  merge sees it immediately.
+- **`chat.rs` and `en_us.json` exceed 50 lines.** One is a command grammar, the other is string
+  data; both are append-only blocks, and splitting them would not make a merge any cleaner.
+
+To move to a new Horizon baseline: take upstream on the files above (the new module and the six
+crates are ours and merge without conflict), then re-add each arm. `cargo check -p horizon-client`
+is the check: a lost arm fails to compile when the enum gains no variant, so also run
+`cargo test -p horizon-client --lib core_tests` — the screen-id uniqueness test fails if a variant
+is added without an id.

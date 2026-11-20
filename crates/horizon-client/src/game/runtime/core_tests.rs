@@ -502,6 +502,7 @@ fn screen_ids_are_distinct_and_stable() {
         Screen::Mod,
         Screen::HudEditor,
         Screen::Studio,
+        Screen::Cinematix,
         Screen::DebugOptions,
     ];
     let ids: Vec<&'static str> = all.iter().map(|screen| screen.id()).collect();

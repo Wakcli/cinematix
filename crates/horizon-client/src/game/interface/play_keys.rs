@@ -10,6 +10,10 @@ impl Game<'_> {
     /// the container's hotbar keys are now (`checkHotbarKeyPressed`).
     pub(super) fn key_pressed(&mut self, key: KeyCode, raw: KeyCode) -> Result<()> {
         self.direct_craft_stop();
+        if self.screen == Screen::Cinematix {
+            self.cinematix_key(key);
+            return Ok(());
+        }
         if self.screen == Screen::Playing && self.replay.playing() {
             self.studio_key(key);
             return Ok(());
@@ -96,6 +100,7 @@ impl Game<'_> {
                 Screen::DebugOptions => self.close_debug_options(),
                 Screen::Mod => self.close_mod_screen(),
                 Screen::Studio => self.close_studio_screen(),
+                Screen::Cinematix => self.close_cinematix_screen(),
                 Screen::HudEditor => self.close_hud_editor(),
             },
             // `checkHotbarKeyPressed`: the keys the controls bind to the off
@@ -170,6 +175,10 @@ impl Game<'_> {
             // key.emote (Horizon's): the emote wheel, a tap again closes it.
             KeyCode::KeyB if self.screen == Screen::Playing && super::cosmetics::enabled() => {
                 self.open_emote_wheel();
+            }
+            // key.cinematix (Horizon's): the film editor over the world.
+            KeyCode::F8 if self.screen == Screen::Playing => {
+                self.open_cinematix_screen();
             }
             KeyCode::KeyB if self.screen == Screen::EmoteWheel => self.close_emote_wheel(None),
             KeyCode::Digit1
