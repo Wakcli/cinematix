@@ -1460,5 +1460,6 @@
   "cinematix.color.sky": "Sky",
   "cinematix.color.fog": "Fog",
   "cinematix.render.link": "Link aspect ratio",
-  "cinematix.transport.loop": "Loop"
+  "cinematix.transport.loop": "Loop",
+  "cinematix.transport.free_view": "Free view"
 }

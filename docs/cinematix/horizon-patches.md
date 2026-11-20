@@ -22,7 +22,7 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 | File | Change | Lines |
 |---|---|---|
 | `crates/horizon-client/src/game.rs` | `Screen::Cinematix` variant, id, `Game` fields, draw arm (skipped during a render), HUD gate, cursor/wheel/key/tick hooks, camera orientation and effects, render dispatch, pack frame timing, film environment applied to the sampled sky | +77 −3 |
-| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera paths/shake, the path overlay, `.cmx` save/load (toolbar too), numeric pose, channel selection, interpolation, meta, environment, undo/redo, render dispatch, world dispatch, `/cinematix`, ctl | +1104 (new) |
+| `crates/horizon-client/src/game/interface/cinematix.rs` | new module: lifecycle, draw, input, camera paths/shake, the path overlay, `.cmx` save/load (toolbar too), numeric pose, channel selection, interpolation, meta, environment, undo/redo, render dispatch, world dispatch, `/cinematix`, ctl | +1154 (new) |
 | `crates/horizon-client/src/game/interface/cinematix_export.rs` | new module: the render job, per-frame readback, resume scan, progress, FFmpeg hand-off, remesh settling | +495 (new) |
 | `crates/horizon-client/src/game/interface/cinematix_world.rs` | new module: resolve `WorldDeltaLayer` at the playhead, revision-gated dirty remesh, box fills, the `world` command | +343 (new) |
 | `crates/horizon-client/src/game/interface/screens.rs` | `is_pause_screen`, `blurs_background` arms and their tests | +7 −4 |
@@ -55,7 +55,7 @@ upstream merge shows up as a conflict on that arm, not as silent drift.
 | `crates/horizon-client-input/src/keybinds.rs` | `key.cinematix` = F8 (`misc`) | +2 |
 | `crates/horizon-client-input/src/actions.rs` | `Cinematix` action | +1 |
 | `crates/horizon-client/Cargo.toml` | `cinematix-editor` dependency | +1 |
-| `crates/horizon-client/assets/horizon/lang/en_us.json` | 135 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +136 −1 |
+| `crates/horizon-client/assets/horizon/lang/en_us.json` | 136 `cinematix.*` / `horizon.cinematix.*` / `key.cinematix` strings | +137 −1 |
 | `tools/layers.json` | six `cinematix-*` crates at `engine` | +10 −2 |
 
 Deliberate deviations from the rules above:

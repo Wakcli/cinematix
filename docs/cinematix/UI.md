@@ -26,7 +26,7 @@ checkbox/keyframe-rail states. The editor's inspector and timeline use it direct
 | Dual-handle range track | the selected clip's start/end in the Clips tab |
 | Cycle/time gradient | the World section's Time |
 | Colour swatch + hex | World Sky and Fog colours |
-| Checkbox | the transport's Loop |
+| Checkbox | the transport's Loop and Free view |
 | Keyframe rail states | the dope-sheet row gutter: unkeyed, animated, keyed at the playhead |
 
 ## 1. What Horizon already gives us

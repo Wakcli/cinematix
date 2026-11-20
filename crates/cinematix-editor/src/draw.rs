@@ -1006,15 +1006,17 @@ fn draw_timeline(
             register(&Text::literal(names[*axis]), *r);
         }
     }
-    let count = Text::tr("cinematix.summary.channels", &[&ed.doc.channels.len()]);
-    right_text(
-        batch,
-        atlas,
-        f.timeline.x + f.timeline.w - 6.0,
-        f.timeline.y + 6.0,
-        &count,
-        FAINT,
-    );
+    if f.free_check.w == 0.0 {
+        let count = Text::tr("cinematix.summary.channels", &[&ed.doc.channels.len()]);
+        right_text(
+            batch,
+            atlas,
+            f.timeline.x + f.timeline.w - 6.0,
+            f.timeline.y + 6.0,
+            &count,
+            FAINT,
+        );
+    }
 
     if f.loop_check.w > 0.0 {
         let check = Rect::new(f.loop_check.x, f.loop_check.y, 16.0, 16.0);
@@ -1042,6 +1044,34 @@ fn draw_timeline(
         register(
             &Text::translate("cinematix.transport.loop", &[]),
             f.loop_check,
+        );
+    }
+    if f.free_check.w > 0.0 {
+        let check = Rect::new(f.free_check.x, f.free_check.y, 16.0, 16.0);
+        box_frame(batch, atlas, check);
+        if ed.preview_free {
+            fill(
+                batch,
+                atlas,
+                Rect::new(check.x + 4.0, check.y + 4.0, 8.0, 8.0),
+                CHEVRON,
+            );
+        }
+        tr(
+            batch,
+            atlas,
+            check.x + 22.0,
+            check.y + 4.0,
+            "cinematix.transport.free_view",
+            if f.free_check.contains(cursor.0, cursor.1) {
+                VALUE
+            } else {
+                DIM
+            },
+        );
+        register(
+            &Text::translate("cinematix.transport.free_view", &[]),
+            f.free_check,
         );
     }
     draw_ruler(ed, f, batch, atlas);

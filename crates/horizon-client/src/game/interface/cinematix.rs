@@ -25,6 +25,8 @@ pub const HELP: &[&str] = &[
     "cinematix fit                  fit the film's range into the timeline window",
     "cinematix section NAME         switch the inspector (camera, actors, models, lights, world,",
     "                               film, render, project)",
+    "cinematix preview film|free    view through the film camera or a detached editor camera",
+    "cinematix preview free X Y Z YAW PITCH   place the detached view",
     "cinematix camera player        set the film camera to the player's eye and view angles",
     "cinematix camera pose X Y Z YAW PITCH [FOV]   place the film camera numerically",
     "cinematix interp step|linear|smooth|spline   set the selected key's interpolation",
@@ -225,8 +227,13 @@ impl Game<'_> {
             let (dx, dy) = (self.cursor.0 - last.0, self.cursor.1 - last.1);
             self.cinematix_look = Some(self.cursor);
             let sensitivity = if self.has_control_down() { 0.04 } else { 0.15 };
-            self.cinematix
-                .look(dx * sensitivity, dy * sensitivity);
+            if self.cinematix.preview_free {
+                self.cinematix
+                    .free_look(dx * sensitivity, dy * sensitivity);
+            } else {
+                self.cinematix
+                    .look(dx * sensitivity, dy * sensitivity);
+            }
         }
         let mods = self.cinematix_mods();
         self.cinematix.drag_to(self.cursor, mods);
@@ -318,7 +325,7 @@ impl Game<'_> {
         if forward == 0.0 && strafe == 0.0 && vertical == 0.0 {
             return;
         }
-        let Some((_, rotation)) = self.cinematix.camera_at(self.cinematix.time()) else {
+        let Some(rotation) = self.cinematix.preview_rotation() else {
             return;
         };
         let dir = rotation * Vec3::new(strafe, 0.0, -forward) + Vec3::Y * vertical;
@@ -328,8 +335,12 @@ impl Game<'_> {
         // `mapped_key` already records the bound movement keys in `self.keys`, releases included,
         // so this only reads: a tap cannot leave the camera drifting.
         const SPEED: f32 = 8.0;
-        self.cinematix
-            .nudge_camera(dir.normalize() * SPEED * dt);
+        let delta = dir.normalize() * SPEED * dt;
+        if self.cinematix.preview_free {
+            self.cinematix.free_nudge(delta);
+        } else {
+            self.cinematix.nudge_camera(delta);
+        }
     }
 
     /// The film camera's path and the playback camera marker, drawn while the editor is open.
@@ -348,55 +359,82 @@ impl Game<'_> {
         let last = times.iter().rposition(|&k| k <= t + 1e-9);
         let next = times.iter().position(|&k| k > t + 1e-9);
         let selected = ed.selected_camera_key_time();
-
-        let mut markers = Vec::new();
+        let mut nearby = Vec::new();
         if let Some(li) = last {
             if li > 0 {
-                markers.push(li - 1);
+                nearby.push(li - 1);
             }
-            markers.push(li);
+            nearby.push(li);
         }
         if let Some(ni) = next {
-            markers.push(ni);
+            nearby.push(ni);
             if ni + 1 < times.len() {
-                markers.push(ni + 1);
+                nearby.push(ni + 1);
             }
         }
-        markers.sort_unstable();
-        markers.dedup();
-        for &i in &markers {
-            let Some((position, rotation)) = ed.camera_at(times[i]) else {
-                continue;
-            };
-            let colour = if selected.is_some_and(|s| (s - times[i]).abs() < 1e-9) {
-                PATH_SELECTED
-            } else if Some(i) == last || Some(i) == next {
-                PATH_KEY
-            } else {
-                PATH_FADE
-            };
-            camera_frustum(g, position, rotation, ed.fov_at(times[i]), colour);
-            key_cross(g, position, colour);
-        }
+        nearby.sort_unstable();
+        nearby.dedup();
 
-        if let Some(li) = last {
-            if li > 0 {
-                camera_path_segment(g, ed, times[li - 1], times[li], PATH_FADE);
+        if ed.preview_free {
+            // From the detached view the whole path is readable; the segment under the playhead
+            // stays bright and the rest fades.
+            for i in 1..times.len() {
+                let current = times[i - 1] <= t + 1e-9 && t <= times[i] + 1e-9;
+                camera_path_segment(
+                    g,
+                    ed,
+                    times[i - 1],
+                    times[i],
+                    if current { PATH_FULL } else { PATH_FADE },
+                );
             }
-            if let Some(ni) = next {
-                camera_path_segment(g, ed, times[li], times[ni], PATH_FULL);
-                if ni + 1 < times.len() {
-                    camera_path_segment(g, ed, times[ni], times[ni + 1], PATH_FADE);
+            for (i, &at) in times.iter().enumerate() {
+                let Some((position, rotation)) = ed.camera_at(at) else {
+                    continue;
+                };
+                let colour = if selected.is_some_and(|s| (s - at).abs() < 1e-9) {
+                    PATH_SELECTED
+                } else if nearby.contains(&i) {
+                    PATH_KEY
+                } else {
+                    PATH_FADE
+                };
+                if nearby.contains(&i) {
+                    camera_frustum(g, position, rotation, ed.fov_at(at), colour);
                 }
+                key_cross(g, position, colour);
             }
-        } else if let Some(ni) = next
-            && ni + 1 < times.len()
-        {
-            camera_path_segment(g, ed, times[ni], times[ni + 1], PATH_FADE);
-        }
-
-        if let Some((position, rotation)) = ed.camera_at(t) {
-            camera_marker(g, position, rotation);
+            if let Some((position, rotation)) = ed.camera_at(t) {
+                camera_frustum(g, position, rotation, ed.fov_at(t), PATH_CURRENT);
+            }
+        } else {
+            for &i in &nearby {
+                let Some((position, rotation)) = ed.camera_at(times[i]) else {
+                    continue;
+                };
+                let colour = if selected.is_some_and(|s| (s - times[i]).abs() < 1e-9) {
+                    PATH_SELECTED
+                } else if Some(i) == last || Some(i) == next {
+                    PATH_KEY
+                } else {
+                    PATH_FADE
+                };
+                camera_frustum(g, position, rotation, ed.fov_at(times[i]), colour);
+                key_cross(g, position, colour);
+            }
+            // Film view: the whole path stays faintly visible, and the segment under the
+            // playhead is bright. Otherwise the line vanishes whenever that segment points
+            // away from the camera.
+            for i in 1..times.len() {
+                let current = times[i - 1] <= t + 1e-9 && t <= times[i] + 1e-9;
+                camera_path_segment(
+                    g,
+                    ed,
+                    times[i - 1],
+                    times[i],
+                    if current { PATH_FULL } else { PATH_FADE },
+                );
+            }
         }
     }
 
@@ -832,6 +870,38 @@ impl Game<'_> {
                     "can_redo": self.cinematix.can_redo(),
                 })))
             }
+            "preview" => {
+                let ed = &mut self.cinematix;
+                match words.get(1).copied() {
+                    None | Some("status") => {}
+                    Some("film") => ed.preview_free = false,
+                    Some("free") => {
+                        if !ed.preview_free {
+                            ed.toggle_free_view();
+                        }
+                        let values: Option<Vec<f32>> =
+                            words.get(2..7).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                        if let Some(v) = values.filter(|v| v.len() == 5) {
+                            ed.free_pos = Vec3::new(v[0], v[1], v[2]);
+                            ed.free_yaw = v[3];
+                            ed.free_pitch = v[4].clamp(-89.9, 89.9);
+                        }
+                    }
+                    Some(other) => {
+                        return Ok(Some(json!({
+                            "ok": false,
+                            "error": format!("unknown preview mode {other}"),
+                        })));
+                    }
+                }
+                Ok(Some(json!({
+                    "ok": true,
+                    "free": ed.preview_free,
+                    "position": [ed.free_pos.x, ed.free_pos.y, ed.free_pos.z],
+                    "yaw": ed.free_yaw,
+                    "pitch": ed.free_pitch,
+                })))
+            }
             "env" => {
                 let env = &mut self.cinematix.doc.scene.meta.environment;
                 let num = |i: usize, lo: f32, hi: f32| -> Result<f32> {
@@ -1003,15 +1073,6 @@ mod tests {
     }
 
     #[test]
-    fn the_playback_marker_points_forward_in_green() {
-        let mut g = Gizmos::default();
-        camera_marker(&mut g, Vec3::new(1.0, 2.0, 3.0), Quat::IDENTITY);
-        assert_eq!(g.on_top.len(), 3);
-        assert!(g.on_top.iter().all(|l| l.color == PATH_CURRENT));
-        assert!(g.on_top[0].end[2] < g.on_top[0].start[2], "{:?}", g.on_top[0]);
-    }
-
-    #[test]
     fn a_key_cross_has_three_coloured_axes() {
         let mut g = Gizmos::default();
         key_cross(&mut g, Vec3::ZERO, PATH_SELECTED);
@@ -1090,15 +1151,4 @@ fn key_cross(g: &mut Gizmos, position: Vec3, colour: u32) {
     path_line(g, position - Vec3::Z * r, position + Vec3::Z * r, colour, 2.0);
 }
 
-/// The playback marker: a green forward line and a cross 1.2 m ahead, so it is visible even
-/// when the apex itself sits exactly on the near plane.
-fn camera_marker(g: &mut Gizmos, position: Vec3, rotation: Quat) {
-    let forward = rotation * Vec3::NEG_Z;
-    let right = rotation * Vec3::X;
-    let up = rotation * Vec3::Y;
-    path_line(g, position + forward * 0.2, position + forward * 3.0, PATH_CURRENT, 2.5);
-    let at = position + forward * 1.2;
-    path_line(g, at - right * 0.25, at + right * 0.25, PATH_CURRENT, 2.0);
-    path_line(g, at - up * 0.25, at + up * 0.25, PATH_CURRENT, 2.0);
-}
 

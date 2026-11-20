@@ -206,6 +206,7 @@ pub struct Frame {
     pub clip_track: Option<Rect>,
     pub clip_handles: Vec<(u8, Rect)>,
     pub loop_check: Rect,
+    pub free_check: Rect,
     pub rows: Vec<Row>,
     pub tree: Vec<(NodeId, usize, bool, Rect)>,
     pub tree_toggle: Vec<(NodeId, Rect)>,
@@ -390,7 +391,12 @@ impl Frame {
         }
 
         let loop_check = if timeline.w > 360.0 {
-            Rect::new(timeline.x + 280.0, timeline.y + 2.0, 60.0, 16.0)
+            Rect::new(timeline.x + 270.0, timeline.y + 2.0, 52.0, 16.0)
+        } else {
+            Rect::new(0.0, 0.0, 0.0, 0.0)
+        };
+        let free_check = if timeline.w > 440.0 {
+            Rect::new(loop_check.x + 56.0, loop_check.y, 72.0, 16.0)
         } else {
             Rect::new(0.0, 0.0, 0.0, 0.0)
         };
@@ -619,6 +625,7 @@ impl Frame {
             clip_track,
             clip_handles,
             loop_check,
+            free_check,
             rows,
             tree,
             tree_toggle,
@@ -772,6 +779,7 @@ mod tests {
             None,
         );
         assert!(f.fields.is_empty());
+        assert!(f.free_check.w > 0.0);
         assert_eq!(f.fps_presets.len(), 4);
         let (w, h, link) = f.size_pair.unwrap();
         for r in [w, h, link] {

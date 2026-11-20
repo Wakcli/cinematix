@@ -80,7 +80,7 @@ path wrote to `<player dir>/cinematix/film.cmx`.
 | Editing commands and undo | done — add/delete/move/interp, 64-step undo/redo (toolbar, Ctrl+Z/Y); live camera looks are not snapshotted |
 | Curve editor with Bezier handles | done — curve view per channel with X/Y/Z/W axes, vertical key editing, and both Bezier control points draggable in time and value; Bezier is offered in the interpolation menu |
 | Tree view (scene hierarchy) | done — disclosure, indentation, kind icons, selection |
-| Viewport camera path overlay | done — yellow frustum/cross markers at the surrounding keys, the current segment and neighbours, and a green forward line plus cross at the playback pose; hidden during an export |
+| Viewport camera path overlay | done — the whole path is faint with the current segment bright, yellow frustum/cross markers sit at the surrounding keys, and a green camera frustum marks the film camera at the playhead. `Free view` detaches the editor camera so the marker can be watched moving along the path; the overlay is hidden during an export |
 
 `Step`/`Linear`/`Smooth`/`Spline`/`Bezier` and quaternion slerp are implemented and tested.
 `Spline` is centripetal Catmull-Rom through the neighbouring keys, with the keys' real times as the

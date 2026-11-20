@@ -218,6 +218,8 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
     argument(&mut d, env, "args", ArgType::Greedy);
     let meta = literal(&mut d, root, "meta");
     argument(&mut d, meta, "args", ArgType::Greedy);
+    let preview = literal(&mut d, root, "preview");
+    argument(&mut d, preview, "args", ArgType::Greedy);
     let channel = literal(&mut d, root, "channel");
     argument(
         &mut d,

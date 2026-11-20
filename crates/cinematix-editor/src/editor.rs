@@ -410,6 +410,12 @@ pub struct Editor {
     pub inspector_float: Option<Rect>,
     /// Whether the render width/height pair keeps its aspect ratio.
     pub resolution_linked: bool,
+    /// A detached editor view for inspecting the path and the film camera; the film camera
+    /// itself does not move while it is on.
+    pub preview_free: bool,
+    pub free_pos: Vec3,
+    pub free_yaw: f32,
+    pub free_pitch: f32,
     pub curve_axis: usize,
     pub expanded: std::collections::HashSet<cinematix_scene::NodeId>,
     /// Bumped whenever the document changes, so the world overlay re-resolves after an undo or a
@@ -455,6 +461,10 @@ impl Editor {
             inspector_tab: crate::frame::InspectorTab::Properties,
             inspector_float: None,
             resolution_linked: true,
+            preview_free: false,
+            free_pos: Vec3::ZERO,
+            free_yaw: 0.0,
+            free_pitch: 0.0,
             curve_axis: 0,
             expanded: Default::default(),
             revision: 0,
@@ -916,6 +926,10 @@ impl Editor {
         }
         if f.loop_check.contains(pos.0, pos.1) {
             self.looping = !self.looping;
+            return true;
+        }
+        if f.free_check.contains(pos.0, pos.1) {
+            self.toggle_free_view();
             return true;
         }
         if self.tab == crate::frame::TimelineTab::Clips {
@@ -1572,6 +1586,17 @@ impl Editor {
     /// What the renderer should look through while the editor is open: the camera at the
     /// playhead, as `camera_view` hands it over.
     pub fn preview_view(&self) -> Option<([f64; 3], f32, f32)> {
+        if self.preview_free {
+            return Some((
+                [
+                    f64::from(self.free_pos.x),
+                    f64::from(self.free_pos.y),
+                    f64::from(self.free_pos.z),
+                ],
+                self.free_yaw,
+                self.free_pitch,
+            ));
+        }
         let (position, rotation) = self.camera_at(self.playhead.t)?;
         let (mut yaw, mut pitch) = view_from_rotation(rotation);
         let fx = &self.doc.scene.meta.camera_fx;
@@ -1649,6 +1674,37 @@ impl Editor {
             return None;
         }
         self.doc.channels.get(ci)?.keys.get(ki).map(|k| k.t)
+    }
+
+    /// Switches between the film camera and a detached view, starting the detached view at the
+    /// film camera's current pose so the cut is not disorienting.
+    pub fn toggle_free_view(&mut self) {
+        self.preview_free = !self.preview_free;
+        if self.preview_free
+            && let Some((position, rotation)) = self.camera_at(self.playhead.t)
+        {
+            self.free_pos = position;
+            let (yaw, pitch) = view_from_rotation(rotation);
+            self.free_yaw = yaw;
+            self.free_pitch = pitch;
+        }
+    }
+
+    pub fn preview_rotation(&self) -> Option<Quat> {
+        if self.preview_free {
+            return Some(rotation_from_view(self.free_yaw, self.free_pitch));
+        }
+        self.camera_at(self.playhead.t)
+            .map(|(_, rotation)| rotation)
+    }
+
+    pub fn free_nudge(&mut self, delta: Vec3) {
+        self.free_pos += delta;
+    }
+
+    pub fn free_look(&mut self, dyaw: f32, dpitch: f32) {
+        self.free_yaw += dyaw;
+        self.free_pitch = (self.free_pitch + dpitch).clamp(-89.9, 89.9);
     }
 
     /// Adopts a pose as the camera's pose. Without `force` a keyed camera is left alone:
@@ -2716,6 +2772,48 @@ mod tests {
         e.selected_key = Some((e.selected_channel.unwrap(), 1));
         assert_eq!(e.selected_camera_key_time(), Some(1.0));
         assert!((e.fov_at(0.0) - 70.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_free_preview_starts_at_the_film_camera_and_does_not_move_it() {
+        let mut e = editor();
+        e.doc.set_camera_translation(Vec3::new(1.0, 2.0, 3.0));
+        e.doc.set_camera_rotation(rotation_from_view(10.0, -5.0));
+        let film = e.preview_view().unwrap();
+        e.toggle_free_view();
+        assert!(e.preview_free);
+        let free = e.preview_view().unwrap();
+        assert!((free.0[0] - 1.0).abs() < 1e-6);
+        assert!((free.1 - 10.0).abs() < 1e-4);
+        assert!((free.2 + 5.0).abs() < 1e-4);
+        e.free_nudge(Vec3::new(0.0, 0.0, 5.0));
+        assert!((e.free_pos.z - 8.0).abs() < 1e-6);
+        e.free_look(15.0, 2.0);
+        assert!((e.preview_view().unwrap().1 - 25.0).abs() < 1e-4);
+        assert!((e.doc.camera_transform().unwrap().translation.z - 3.0).abs() < 1e-6);
+        e.toggle_free_view();
+        assert!(!e.preview_free);
+        let back = e.preview_view().unwrap();
+        assert!((back.0[0] - film.0[0]).abs() < 1e-6);
+        assert!((back.1 - film.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_free_view_checkbox_detaches_the_preview() {
+        let mut e = editor();
+        let f = e.frame();
+        assert!(f.free_check.w > 0.0);
+        assert!(!e.preview_free);
+        assert!(e.press(
+            (f.free_check.x + 8.0, f.free_check.y + 8.0),
+            Mods::default()
+        ));
+        assert!(e.preview_free);
+        assert!(e.press(
+            (f.free_check.x + 8.0, f.free_check.y + 8.0),
+            Mods::default()
+        ));
+        assert!(!e.preview_free);
     }
 
     #[test]
