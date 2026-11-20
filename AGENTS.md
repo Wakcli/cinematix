@@ -2,7 +2,7 @@
 
 ## Read first
 
-Read docs/REQUIREMENTS.md. Inspect the actual upstream Horizon source, its AGENTS.md, CONTRIBUTING.md, docs/layers.md, docs/design-system.md, docs/architecture.md, docs/ui-kit.md and docs/hdr-passes.md before choosing integration points. Preserve upstream instructions when importing a Horizon baseline; merge these Cinematix rules rather than replacing upstream guidance.
+Read goal.md and docs/REQUIREMENTS.md. Inspect the actual upstream Horizon source, its AGENTS.md, CONTRIBUTING.md, docs/layers.md, docs/design-system.md, docs/architecture.md, docs/ui-kit.md and docs/hdr-passes.md before choosing integration points. Preserve upstream instructions when importing a Horizon baseline; merge these Cinematix rules rather than replacing upstream guidance.
 
 ## Non-negotiable constraints
 
