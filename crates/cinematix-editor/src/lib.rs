@@ -2,6 +2,7 @@
 //! glue (the `Screen` variant, input routing and the control socket) lives in `horizon-client`;
 //! everything here is testable with `cargo test` and no GPU.
 
+mod curve;
 mod document;
 mod draw;
 mod editor;

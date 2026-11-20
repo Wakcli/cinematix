@@ -3,6 +3,7 @@ use crate::editor::{Button, Field, Section, fields_for};
 use cinematix_scene::NodeId;
 use cinematix_timeline::TimeAxis;
 use cinematix_ui::{Rect, Tokens};
+use std::collections::HashSet;
 
 pub const ROW_H: f32 = 18.0;
 pub const GUTTER_W: f32 = 156.0;
@@ -53,9 +54,10 @@ impl Tool {
         }
     }
 
-    /// Tools without a backend yet are drawn dimmed and take no click.
-    pub fn enabled(self) -> bool {
-        matches!(self, Tool::Save)
+    /// Whether the tool has a backend that can run now; Undo/Redo depend on the editor's stacks,
+    /// so the draw and press paths ask `Editor` instead of this.
+    pub fn implemented(self) -> bool {
+        !matches!(self, Tool::Render)
     }
 }
 
@@ -79,12 +81,17 @@ pub struct Frame {
     pub split_v: Rect,
     pub tabs: Vec<(TimelineTab, Rect)>,
     pub tools: Vec<(Tool, Rect)>,
+    /// Value-axis buttons (X/Y/Z/W) in the curve editor, for the selected channel's kind.
+    pub curve_axes: Vec<(usize, Rect)>,
+    /// Where the curve is plotted (the lane area, under the ruler).
+    pub curve_plot: Rect,
     pub axis: TimeAxis,
     pub rail_items: Vec<(Section, Rect)>,
     pub buttons: Vec<(Button, Rect)>,
     pub fields: Vec<(Field, Rect)>,
     pub rows: Vec<Row>,
-    pub list: Vec<(NodeId, Rect)>,
+    pub tree: Vec<(NodeId, usize, bool, Rect)>,
+    pub tree_toggle: Vec<(NodeId, Rect)>,
     pub visible_rows: usize,
 }
 
@@ -96,6 +103,8 @@ impl Frame {
         size: (f32, f32),
         timeline_frac: f32,
         inspector_frac: f32,
+        selected_channel: Option<usize>,
+        expanded: &HashSet<NodeId>,
     ) -> Self {
         let (w, h) = size;
         let t = Tokens::default();
@@ -164,6 +173,28 @@ impl Frame {
             tab_x += rect.w + 2.0;
         }
 
+        let mut curve_axes = Vec::new();
+        if let Some(ci) = selected_channel
+            && let Some(kind) = doc.value_at(ci, 0.0)
+        {
+            let count = crate::curve::components(kind);
+            let mut ax = timeline.x + 240.0;
+            for i in 0..count {
+                let rect = Rect::new(ax, timeline.y + 2.0, 16.0, 16.0);
+                if rect.x + rect.w > timeline.x + timeline.w - 4.0 {
+                    break;
+                }
+                curve_axes.push((i, rect));
+                ax += 18.0;
+            }
+        }
+        let curve_plot = Rect::new(
+            lanes.x + 44.0,
+            lanes.y + 3.0,
+            (lanes.w - 48.0).max(0.0),
+            (lanes.h - 6.0).max(0.0),
+        );
+
         let mut tools = Vec::with_capacity(Tool::ALL.len());
         let mut tool_x = 72.0;
         for tool in Tool::ALL {
@@ -231,23 +262,68 @@ impl Frame {
             });
         }
 
-        let mut list = Vec::new();
-        let nodes = match section {
-            Section::Actors => doc.nodes_of(|k| matches!(k, cinematix_scene::NodeKind::Actor(_))),
-            Section::Models => doc.nodes_of(|k| matches!(k, cinematix_scene::NodeKind::Mesh(_))),
-            Section::Lights => doc.nodes_of(|k| matches!(k, cinematix_scene::NodeKind::Light(_))),
-            _ => Vec::new(),
-        };
-        let mut ly = inspector.y + 30.0;
-        for id in nodes {
-            if ly + ROW_H > inspector.y + inspector.h - t.pad {
-                break;
+        let mut tree = Vec::new();
+        let mut tree_toggle = Vec::new();
+        let mut ly = fields
+            .last()
+            .map(|(_, r)| r.y + r.h + 8.0)
+            .unwrap_or(inspector.y + 30.0);
+        let bottom = inspector.y + inspector.h - t.pad;
+        fn walk(
+            doc: &Document,
+            id: NodeId,
+            depth: usize,
+            expanded: &HashSet<NodeId>,
+            y: &mut f32,
+            bottom: f32,
+            x: f32,
+            w: f32,
+            tree: &mut Vec<(NodeId, usize, bool, Rect)>,
+            toggles: &mut Vec<(NodeId, Rect)>,
+        ) {
+            let Some(node) = doc.node(id) else {
+                return;
+            };
+            if *y + ROW_H > bottom {
+                return;
             }
-            list.push((
-                id,
-                Rect::new(inspector.x + t.pad, ly, inspector.w - t.pad * 2.0, ROW_H),
-            ));
-            ly += ROW_H;
+            let has_children = !node.children.is_empty();
+            let row = Rect::new(x + depth as f32 * 10.0, *y, w - depth as f32 * 10.0, ROW_H);
+            tree.push((id, depth, has_children, row));
+            if has_children {
+                toggles.push((id, Rect::new(row.x + 2.0, row.y + 4.0, 10.0, 10.0)));
+            }
+            *y += ROW_H;
+            if has_children && expanded.contains(&id) {
+                for child in node.children.clone() {
+                    walk(
+                        doc,
+                        child,
+                        depth + 1,
+                        expanded,
+                        y,
+                        bottom,
+                        x,
+                        w,
+                        tree,
+                        toggles,
+                    );
+                }
+            }
+        }
+        for root in doc.scene.roots.clone() {
+            walk(
+                doc,
+                root,
+                0,
+                expanded,
+                &mut ly,
+                bottom,
+                inspector.x + t.pad,
+                inspector.w - t.pad * 2.0,
+                &mut tree,
+                &mut tree_toggle,
+            );
         }
 
         Self {
@@ -264,12 +340,15 @@ impl Frame {
             split_v,
             tabs,
             tools,
+            curve_axes,
+            curve_plot,
             axis,
             rail_items,
             buttons,
             fields,
             rows,
-            list,
+            tree,
+            tree_toggle,
             visible_rows,
         }
     }
@@ -292,7 +371,16 @@ mod tests {
     #[test]
     fn regions_tile_without_overlapping() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0), 0.38, 0.22);
+        let f = Frame::build(
+            &doc,
+            Section::Camera,
+            0,
+            (1280.0, 720.0),
+            0.38,
+            0.22,
+            None,
+            &std::collections::HashSet::new(),
+        );
         assert_eq!(f.header.w, 1280.0);
         assert!(f.rail.x + f.rail.w <= f.viewport.x + 0.01);
         assert!(f.viewport.x + f.viewport.w <= f.inspector.x + 0.01);
@@ -305,7 +393,16 @@ mod tests {
     fn a_small_window_still_places_every_region_inside_it() {
         for (w, h) in [(320.0, 240.0), (640.0, 480.0), (3840.0, 2160.0)] {
             let doc = Document::new();
-            let f = Frame::build(&doc, Section::Project, 0, (w, h), 0.38, 0.22);
+            let f = Frame::build(
+                &doc,
+                Section::Project,
+                0,
+                (w, h),
+                0.38,
+                0.22,
+                None,
+                &std::collections::HashSet::new(),
+            );
             for r in [
                 f.header,
                 f.rail,
@@ -324,7 +421,16 @@ mod tests {
     #[test]
     fn every_rail_section_gets_a_button_that_stays_in_the_rail() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0), 0.38, 0.22);
+        let f = Frame::build(
+            &doc,
+            Section::Camera,
+            0,
+            (1280.0, 720.0),
+            0.38,
+            0.22,
+            None,
+            &std::collections::HashSet::new(),
+        );
         assert_eq!(f.rail_items.len(), Section::ALL.len());
         for (s, r) in &f.rail_items {
             assert!(f.rail.contains(r.x, r.y), "{s:?}");
@@ -335,7 +441,16 @@ mod tests {
     #[test]
     fn rows_cover_the_channels_from_the_scroll_position() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 2, (1280.0, 720.0), 0.38, 0.22);
+        let f = Frame::build(
+            &doc,
+            Section::Camera,
+            2,
+            (1280.0, 720.0),
+            0.38,
+            0.22,
+            None,
+            &std::collections::HashSet::new(),
+        );
         assert_eq!(f.rows.first().map(|r| r.chan), Some(2));
         assert!(f.rows.len() <= f.visible_rows);
         for r in &f.rows {
@@ -346,8 +461,17 @@ mod tests {
     #[test]
     fn the_time_axis_maps_the_window_onto_the_ruler() {
         let doc = Document::new();
-        let f = Frame::build(&doc, Section::Camera, 0, (1280.0, 720.0), 0.38, 0.22)
-            .with_window(0.0, 10.0);
+        let f = Frame::build(
+            &doc,
+            Section::Camera,
+            0,
+            (1280.0, 720.0),
+            0.38,
+            0.22,
+            None,
+            &std::collections::HashSet::new(),
+        )
+        .with_window(0.0, 10.0);
         assert!((f.axis.x(0.0) - f.ruler.x).abs() < 0.01);
         assert!((f.axis.x(10.0) - (f.ruler.x + f.ruler.w)).abs() < 0.01);
     }

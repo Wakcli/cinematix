@@ -156,6 +156,18 @@ impl Game<'_> {
             return;
         };
         let mods = self.cinematix_mods();
+        if mods.ctrl && key == KeyCode::KeyZ {
+            if mods.shift {
+                self.cinematix.redo();
+            } else {
+                self.cinematix.undo();
+            }
+            return;
+        }
+        if mods.ctrl && key == KeyCode::KeyY {
+            self.cinematix.redo();
+            return;
+        }
         let result = match editor_key {
             EditorKey::Left | EditorKey::Right if mods.shift => {
                 let frames = if editor_key == EditorKey::Left { -10 } else { 10 };

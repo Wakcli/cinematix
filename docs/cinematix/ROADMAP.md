@@ -77,8 +77,9 @@ path wrote to `<player dir>/cinematix/film.cmx`.
 | Channels, keys, interpolation, pure evaluation | done — `cinematix-anim`, 10 tests |
 | Time axis, zoom, pan, snapping, hit testing | done — `cinematix-timeline`, 9 tests |
 | Dope sheet editing | done — rows, keys, selection, drag in time, add/delete, per-key interpolation |
-| Editing commands and undo | partial — add/delete/move/interp exist; undo does not |
-| Curve editor with Bezier handles | todo |
+| Editing commands and undo | done — add/delete/move/interp, 64-step undo/redo (toolbar, Ctrl+Z/Y); live camera looks are not snapshotted |
+| Curve editor with Bezier handles | partial — curve view per channel with X/Y/Z/W axes and vertical key editing; Bezier handles are drawn but not draggable |
+| Tree view (scene hierarchy) | done — disclosure, indentation, kind icons, selection |
 
 `Step`/`Linear`/`Smooth`/`Spline`/`Bezier` and quaternion slerp are implemented and tested.
 `Spline` is Catmull-Rom through the neighbouring keys, the same formula Studio's camera track uses

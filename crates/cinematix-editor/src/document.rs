@@ -132,7 +132,7 @@ pub fn rest_value(node: &Node, prop: Prop) -> Option<Value> {
 
 /// The editable document: the scene and one channel per animatable property of every node. A
 /// channel with no keys still draws, dimmed, so what can be animated is visible before it is keyed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Document {
     pub scene: Scene,
     pub channels: Vec<Channel>,

@@ -1415,8 +1415,8 @@
   "cinematix.tab.curves": "Curve Editor",
   "cinematix.tab.clips": "Clips",
   "cinematix.tool.save": "Save film",
-  "cinematix.tool.undo": "Undo (not implemented)",
-  "cinematix.tool.redo": "Redo (not implemented)",
+  "cinematix.tool.undo": "Undo",
+  "cinematix.tool.redo": "Redo",
   "cinematix.tool.render": "Render (use /cinematix render)",
   "cinematix.menu.interpolation": "Interpolation",
   "cinematix.interp.step": "Step",
@@ -1425,5 +1425,7 @@
   "cinematix.interp.spline": "Spline",
   "cinematix.menu.mute": "Mute channel (not implemented)",
   "cinematix.menu.rename": "Rename (not implemented)",
-  "cinematix.menu.paste": "Paste key (not implemented)"
+  "cinematix.menu.paste": "Paste key (not implemented)",
+  "cinematix.curve.select": "Select a channel to edit its curve",
+  "cinematix.curve.no_keys": "No keys on this channel"
 }

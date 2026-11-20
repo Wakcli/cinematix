@@ -245,6 +245,14 @@ enum Drag {
         start: f32,
         y: f32,
     },
+    CurveKey {
+        chan: usize,
+        key: usize,
+        axis: usize,
+        start: f64,
+        y: f32,
+        unit: f64,
+    },
     InspectorSplit {
         start: f32,
         x: f32,
@@ -263,9 +271,14 @@ pub struct Editor {
     pub selected_node: Option<cinematix_scene::NodeId>,
     pub status: Option<&'static str>,
     /// The bottom dock's share of the stage, and the inspector's share of the width.
+    pub tab: crate::frame::TimelineTab,
+    pub curve_axis: usize,
+    pub expanded: std::collections::HashSet<cinematix_scene::NodeId>,
     pub timeline_frac: f32,
     pub inspector_frac: f32,
     request: Option<Request>,
+    history: Vec<Document>,
+    redo: Vec<Document>,
     pub(crate) menu: Option<Menu>,
     t0: f64,
     t1: f64,
@@ -296,9 +309,14 @@ impl Editor {
             selected_key: None,
             selected_node: None,
             status: None,
+            tab: crate::frame::TimelineTab::DopeSheet,
+            curve_axis: 0,
+            expanded: Default::default(),
             timeline_frac: 0.38,
             inspector_frac: 0.22,
             request: None,
+            history: Vec::new(),
+            redo: Vec::new(),
             menu: None,
             t0,
             t1,
@@ -327,8 +345,67 @@ impl Editor {
             self.size,
             self.timeline_frac,
             self.inspector_frac,
+            self.selected_channel,
+            &self.expanded,
         )
         .with_window(self.t0, self.t1)
+    }
+
+    /// Snapshots the document before an edit, so it can be undone. The redo stack is dropped:
+    /// a new edit forks the history.
+    pub fn checkpoint(&mut self) {
+        const LIMIT: usize = 64;
+        if self.history.len() == LIMIT {
+            self.history.remove(0);
+        }
+        self.history.push(self.doc.clone());
+        self.redo.clear();
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.history.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.history.pop() else {
+            return false;
+        };
+        self.redo.push(self.doc.clone());
+        self.restore(previous);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else {
+            return false;
+        };
+        self.history.push(self.doc.clone());
+        self.restore(next);
+        true
+    }
+
+    fn restore(&mut self, doc: Document) {
+        self.doc = doc;
+        let channels = self.doc.channels.len();
+        if self.selected_channel.is_some_and(|ci| ci >= channels) {
+            self.selected_channel = None;
+        }
+        if let Some((ci, ki)) = self.selected_key
+            && self.doc.channels.get(ci).is_none_or(|c| ki >= c.keys.len())
+        {
+            self.selected_key = None;
+        }
+        if self
+            .selected_node
+            .is_some_and(|id| !self.doc.scene.nodes.contains_key(&id))
+        {
+            self.selected_node = None;
+        }
+        self.seek(self.playhead.t);
     }
 
     /// A one-shot command the panel buttons asked for (Save), for the game to perform.
@@ -433,6 +510,7 @@ impl Editor {
             return false;
         };
         let t = self.playhead.t;
+        self.checkpoint();
         match self.doc.insert_key(ci, t) {
             Some(ki) => {
                 self.selected_channel = Some(ci);
@@ -450,6 +528,7 @@ impl Editor {
         let Some((ci, ki)) = self.selected_key else {
             return false;
         };
+        self.checkpoint();
         match self
             .doc
             .channels
@@ -469,6 +548,7 @@ impl Editor {
         let Some((ci, ki)) = self.selected_key else {
             return false;
         };
+        self.checkpoint();
         if !self.doc.delete_key(ci, ki) {
             return false;
         }
@@ -558,10 +638,15 @@ impl Editor {
         let f = self.frame();
         for (tool, r) in &f.tools {
             if r.contains(pos.0, pos.1) {
-                if tool.enabled() {
-                    if *tool == crate::frame::Tool::Save {
-                        self.request = Some(Request::Save);
+                match tool {
+                    crate::frame::Tool::Save => self.request = Some(Request::Save),
+                    crate::frame::Tool::Undo => {
+                        self.undo();
                     }
+                    crate::frame::Tool::Redo => {
+                        self.redo();
+                    }
+                    crate::frame::Tool::Render => {}
                 }
                 return true;
             }
@@ -582,10 +667,45 @@ impl Editor {
         }
         for (tab, r) in &f.tabs {
             if r.contains(pos.0, pos.1) {
-                // Only the dope sheet has a body; the other tabs are drawn but do nothing yet.
-                let _ = tab;
+                match tab {
+                    crate::frame::TimelineTab::DopeSheet | crate::frame::TimelineTab::Curves => {
+                        self.tab = *tab;
+                    }
+                    crate::frame::TimelineTab::Clips => {}
+                }
                 return true;
             }
+        }
+        for (axis, r) in &f.curve_axes {
+            if r.contains(pos.0, pos.1) {
+                self.curve_axis = *axis;
+                return true;
+            }
+        }
+        if self.tab == crate::frame::TimelineTab::Curves
+            && f.curve_plot.contains(pos.0, pos.1)
+            && let Some(ci) = self.selected_channel
+            && let Some(ch) = self.doc.channel(ci)
+        {
+            let times: Vec<f64> = ch.keys.iter().map(|k| k.t).collect();
+            if let Some(ki) = cinematix_timeline::hit_key(pos.0, &f.axis, &times, 6.0)
+                && let Some((lo, hi)) = crate::curve::range(ch, self.curve_axis)
+                && let Some(start) = crate::curve::component(ch.keys[ki].v, self.curve_axis)
+            {
+                let unit = (hi - lo) / f64::from(f.curve_plot.h.max(1.0));
+                self.checkpoint();
+                self.selected_channel = Some(ci);
+                self.selected_key = Some((ci, ki));
+                self.drag = Some(Drag::CurveKey {
+                    chan: ci,
+                    key: ki,
+                    axis: self.curve_axis,
+                    start,
+                    y: pos.1,
+                    unit,
+                });
+            }
+            return true;
         }
         for (s, r) in &f.rail_items {
             if r.contains(pos.0, pos.1) {
@@ -617,7 +737,15 @@ impl Editor {
                 return true;
             }
         }
-        for (id, r) in &f.list {
+        for (id, r) in &f.tree_toggle {
+            if r.contains(pos.0, pos.1) {
+                if !self.expanded.remove(id) {
+                    self.expanded.insert(*id);
+                }
+                return true;
+            }
+        }
+        for (id, _, _, r) in &f.tree {
             if r.contains(pos.0, pos.1) {
                 self.selected_node = Some(*id);
                 return true;
@@ -731,6 +859,25 @@ impl Editor {
                 self.inspector_frac = (start + (x - pos.0) / width).clamp(0.12, 0.4);
                 true
             }
+            Drag::CurveKey {
+                chan,
+                key,
+                axis,
+                start,
+                y,
+                unit,
+            } => {
+                let value = start + f64::from(y - pos.1) * unit;
+                match self
+                    .doc
+                    .channels
+                    .get_mut(chan)
+                    .and_then(|c| c.keys.get_mut(key))
+                {
+                    Some(k) => crate::curve::set_component(&mut k.v, axis, value as f32),
+                    None => false,
+                }
+            }
         }
     }
 
@@ -801,6 +948,10 @@ impl Editor {
     /// opening the editor over a film must not move it. With `force` a keyed pose becomes a key
     /// at the playhead, so the reset is itself part of the animation.
     pub fn take_pose(&mut self, position: Vec3, yaw: f32, pitch: f32, force: bool) -> bool {
+        if !force && self.doc.camera_keyed() {
+            return false;
+        }
+        self.checkpoint();
         let rotation = rotation_from_view(yaw, pitch);
         if !force && self.doc.camera_keyed() {
             return false;
@@ -880,6 +1031,7 @@ impl Editor {
     /// Sets the camera's field of view: a keyed FOV channel gets a key at the playhead, an
     /// unkeyed one changes the camera's rest data.
     pub fn set_fov(&mut self, fov: f32) -> bool {
+        self.checkpoint();
         let id = self.doc.scene.camera;
         let t = self.playhead.t;
         let fov = fov.clamp(1.0, 179.0);
@@ -907,6 +1059,7 @@ impl Editor {
     /// Replaces the film after a load or a new document: the playhead and the window follow the
     /// new range, and no selection points into the old channels.
     pub fn adopt_document(&mut self, doc: Document) {
+        self.checkpoint();
         self.doc = doc;
         let (r0, r1) = self.doc.scene.meta.range;
         self.playhead.fps = self.doc.scene.meta.fps.round().max(1.0);
@@ -1344,6 +1497,143 @@ mod tests {
         assert_eq!(tab, crate::frame::TimelineTab::Curves);
         assert!(e.press((r.x + 2.0, r.y + 2.0), Mods::default()));
         assert_eq!(e.section, Section::Camera);
+    }
+
+    #[test]
+    fn keying_can_be_undone_and_redone() {
+        let mut e = editor();
+        e.seek_frame(12);
+        assert!(e.add_key());
+        assert_eq!(e.doc.key_count(), 1);
+        assert!(e.can_undo());
+        assert!(e.undo());
+        assert_eq!(e.doc.key_count(), 0);
+        assert!(e.can_redo());
+        assert!(e.redo());
+        assert_eq!(e.doc.key_count(), 1);
+    }
+
+    #[test]
+    fn deleting_and_interpolation_changes_are_undoable() {
+        let mut e = editor();
+        e.seek_frame(6);
+        assert!(e.add_key());
+        let (ci, _) = e.selected_key.unwrap();
+        assert!(e.delete_key());
+        assert!(e.undo());
+        assert_eq!(e.doc.channels[ci].keys.len(), 1);
+        e.selected_key = Some((ci, 0));
+        assert!(e.set_selected_interp(Interp::Step));
+        assert_eq!(e.doc.channels[ci].keys[0].interp, Interp::Step);
+        assert!(e.undo());
+        assert_eq!(e.doc.channels[ci].keys[0].interp, Interp::Spline);
+    }
+
+    #[test]
+    fn a_new_edit_drops_the_redo_stack() {
+        let mut e = editor();
+        e.seek_frame(3);
+        assert!(e.add_key());
+        assert!(e.undo());
+        e.seek_frame(9);
+        assert!(e.add_key());
+        assert!(!e.can_redo());
+    }
+
+    #[test]
+    fn the_curve_tab_edits_a_key_vertically() {
+        use crate::curve;
+        let mut e = editor();
+        e.seek_frame(0);
+        assert!(e.add_key());
+        e.seek_frame(24);
+        assert!(e.add_key());
+        let (ci, _) = e.selected_key.unwrap();
+        let f = e.frame();
+        let (_, tab) = *f
+            .tabs
+            .iter()
+            .find(|(t, _)| *t == crate::frame::TimelineTab::Curves)
+            .unwrap();
+        assert!(e.press((tab.x + 4.0, tab.y + 4.0), Mods::default()));
+        assert_eq!(e.tab, crate::frame::TimelineTab::Curves);
+        let f = e.frame();
+        let x = f.axis.x(0.0);
+        let y = f.curve_plot.y + 10.0;
+        assert!(e.press((x, y), Mods::default()));
+        assert!(e.dragging());
+        let before = curve::component(e.doc.channels[ci].keys[0].v, 0).unwrap();
+        e.drag_to((x, y + 40.0), Mods::default());
+        let after = curve::component(e.doc.channels[ci].keys[0].v, 0).unwrap();
+        assert!(after < before, "{before} -> {after}");
+        assert!(e.undo());
+    }
+
+    #[test]
+    fn a_vector_channel_switches_the_edited_axis() {
+        use crate::curve;
+        let mut e = editor();
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        e.selected_channel = Some(ci);
+        e.seek_frame(0);
+        assert!(e.add_key());
+        e.seek_frame(24);
+        assert!(e.add_key());
+        let f = e.frame();
+        let (_, tab) = *f
+            .tabs
+            .iter()
+            .find(|(t, _)| *t == crate::frame::TimelineTab::Curves)
+            .unwrap();
+        e.press((tab.x + 4.0, tab.y + 4.0), Mods::default());
+        let f = e.frame();
+        let (axis, r) = *f.curve_axes.iter().find(|(a, _)| *a == 1).unwrap();
+        assert_eq!(axis, 1);
+        assert!(e.press((r.x + 3.0, r.y + 3.0), Mods::default()));
+        assert_eq!(e.curve_axis, 1);
+        let x = f.axis.x(0.0);
+        assert!(e.press((x, f.curve_plot.y + 10.0), Mods::default()));
+        let before = curve::component(e.doc.channels[ci].keys[0].v, 1).unwrap();
+        e.drag_to((x, f.curve_plot.y + 50.0), Mods::default());
+        let after = curve::component(e.doc.channels[ci].keys[0].v, 1).unwrap();
+        assert!(after < before, "{before} -> {after}");
+        assert_eq!(curve::component(e.doc.channels[ci].keys[0].v, 0), Some(0.0));
+    }
+
+    #[test]
+    fn the_tree_lists_parents_and_toggles_their_children() {
+        let mut e = editor();
+        let mut child = crate::document::new_node(3, cinematix_scene::NodeKind::Empty);
+        child.parent = Some(cinematix_scene::NodeId(1));
+        e.doc.scene.nodes.insert(child.id, child);
+        if let Some(camera) = e.doc.scene.nodes.get_mut(&cinematix_scene::NodeId(1)) {
+            camera.children.push(cinematix_scene::NodeId(3));
+        }
+        e.doc.sync_channels();
+        e.expanded.insert(cinematix_scene::NodeId(1));
+        let f = e.frame();
+        assert!(
+            f.tree
+                .iter()
+                .any(|(id, depth, _, _)| *id == cinematix_scene::NodeId(3) && *depth == 1)
+        );
+        let (id, r) = *f
+            .tree_toggle
+            .iter()
+            .find(|(id, _)| *id == cinematix_scene::NodeId(1))
+            .unwrap();
+        assert_eq!(id, cinematix_scene::NodeId(1));
+        assert!(e.press((r.x + 2.0, r.y + 2.0), Mods::default()));
+        assert!(!e.expanded.contains(&cinematix_scene::NodeId(1)));
+        let f = e.frame();
+        assert!(
+            !f.tree
+                .iter()
+                .any(|(id, _, _, _)| *id == cinematix_scene::NodeId(3))
+        );
     }
 
     #[test]

@@ -154,7 +154,13 @@ fn draw_header(
     let mut hovered = None;
     for (tool, r) in &f.tools {
         let hover = r.contains(cursor.0, cursor.1);
-        if tool.enabled() {
+        let enabled = match tool {
+            crate::frame::Tool::Save => true,
+            crate::frame::Tool::Undo => ed.can_undo(),
+            crate::frame::Tool::Redo => ed.can_redo(),
+            crate::frame::Tool::Render => false,
+        };
+        if enabled {
             if hover {
                 fill(batch, atlas, *r, HOVER);
             }
@@ -305,16 +311,40 @@ fn draw_inspector(
         draw_field(ed, *field, *r, batch, atlas, cursor);
     }
 
-    for (id, r) in &f.list {
+    for (id, _depth, has_children, r) in &f.tree {
         if ed.selected_node == Some(*id) {
             fill(batch, atlas, *r, ROW_ALT);
         }
-        let name = match ed.doc.node(*id) {
+        let node = ed.doc.node(*id);
+        let expanded = ed.expanded.contains(id);
+        if *has_children {
+            let marker = if expanded { "v" } else { ">" };
+            text(
+                batch,
+                atlas,
+                r.x + 2.0,
+                r.y + 4.0,
+                &Text::literal(marker),
+                DIM,
+            );
+        }
+        let icon = node.map(|n| match &n.kind {
+            cinematix_scene::NodeKind::Camera(_) => glyphs::CAMERA,
+            cinematix_scene::NodeKind::Light(_) => glyphs::LIGHT,
+            cinematix_scene::NodeKind::Actor(_) => glyphs::USER,
+            cinematix_scene::NodeKind::Mesh(_) => glyphs::SHAPES,
+            cinematix_scene::NodeKind::Empty => glyphs::SETTINGS,
+        });
+        if let Some(icon) = icon {
+            icon.draw(batch, atlas, r.x + 12.0, r.y + 2.0, 14.0, DIM);
+        }
+        let name = match node {
             Some(n) if !n.name.is_empty() => Text::literal(n.name.clone()),
             Some(n) => Text::translate(kind_key(&n.kind), &[]),
             None => Text::literal(String::new()),
         };
-        text(batch, atlas, r.x + 4.0, r.y + 4.0, &name, TEXT);
+        text(batch, atlas, r.x + 30.0, r.y + 4.0, &name, TEXT);
+        register(&name, *r);
     }
 
     draw_summary(ed, f, batch, atlas);
@@ -449,33 +479,50 @@ fn draw_timeline(
     batch.fill(atlas, f.timeline.x, f.timeline.y, f.timeline.w, 1.0, LINE);
 
     for (tab, r) in &f.tabs {
-        let active = *tab == crate::frame::TimelineTab::DopeSheet;
-        let hover = active && r.contains(cursor.0, cursor.1);
+        let active = *tab == ed.tab;
+        let implemented = !matches!(tab, crate::frame::TimelineTab::Clips);
+        let hover = implemented && !active && r.contains(cursor.0, cursor.1);
         if active {
             fill(batch, atlas, *r, ACTIVE);
             batch.fill(atlas, r.x, r.y + r.h - 2.0, r.w, 2.0, ACCENT);
         } else if hover {
             fill(batch, atlas, *r, HOVER);
         }
-        tab_icon(*tab).draw(
-            batch,
-            atlas,
-            r.x + 3.0,
-            r.y + 2.0,
-            16.0,
-            if active { TEXT } else { FAINT },
-        );
+        let colour = if active {
+            TEXT
+        } else if implemented {
+            DIM
+        } else {
+            FAINT
+        };
+        tab_icon(*tab).draw(batch, atlas, r.x + 3.0, r.y + 2.0, 16.0, colour);
         text(
             batch,
             atlas,
             r.x + 22.0,
             r.y + 6.0,
             &Text::translate(tab.label(), &[]),
-            if active { TEXT } else { FAINT },
+            colour,
         );
-        if active {
+        if implemented {
             register(&Text::translate(tab.label(), &[]), *r);
         }
+    }
+    for (axis, r) in &f.curve_axes {
+        let active = ed.tab == crate::frame::TimelineTab::Curves && *axis == ed.curve_axis;
+        if active {
+            fill(batch, atlas, *r, ACTIVE);
+        }
+        let names = ["X", "Y", "Z", "W"];
+        text(
+            batch,
+            atlas,
+            r.x + 5.0,
+            r.y + 5.0,
+            &Text::literal(names[*axis]),
+            if active { TEXT } else { DIM },
+        );
+        register(&Text::literal(names[*axis]), *r);
     }
     let count = Text::tr("cinematix.summary.channels", &[&ed.doc.channels.len()]);
     right_text(
@@ -488,7 +535,11 @@ fn draw_timeline(
     );
 
     draw_ruler(ed, f, batch, atlas);
-    draw_rows(ed, f, batch, atlas);
+    if ed.tab == crate::frame::TimelineTab::Curves {
+        draw_curve(ed, f, batch, atlas);
+    } else {
+        draw_rows(ed, f, batch, atlas);
+    }
     draw_playhead(ed, f, batch, atlas);
     draw_transport(ed, f, batch, atlas, cursor);
 }
@@ -537,6 +588,89 @@ fn draw_ruler(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
         f.ruler.w,
         1.0,
         LINE,
+    );
+}
+
+fn draw_curve(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
+    let Some(ci) = ed.selected_channel else {
+        centered(batch, atlas, f, "cinematix.curve.select");
+        return;
+    };
+    let Some(ch) = ed.doc.channel(ci) else {
+        centered(batch, atlas, f, "cinematix.curve.select");
+        return;
+    };
+    let Some((lo, hi)) = crate::curve::range(ch, ed.curve_axis) else {
+        centered(batch, atlas, f, "cinematix.curve.no_keys");
+        return;
+    };
+    let plot = f.curve_plot;
+    let value_y = |v: f64| plot.y + plot.h * (1.0 - ((v - lo) / (hi - lo).max(1e-9)) as f32);
+    for i in 0..=4 {
+        let v = lo + (hi - lo) * f64::from(i) / 4.0;
+        let y = value_y(v);
+        batch.fill(atlas, plot.x, y, plot.w, 1.0, rgba(34, 34, 34, 255));
+        let label = Text::literal(format!("{v:.2}"));
+        right_text(batch, atlas, plot.x - 4.0, y - 4.0, &label, FAINT);
+    }
+    let mut prev: Option<(f32, f32)> = None;
+    let mut x = plot.x;
+    while x <= plot.x + plot.w {
+        let t = f.axis.t(x);
+        if let Some(value) = ch.eval(t)
+            && let Some(v) = crate::curve::component(value, ed.curve_axis)
+        {
+            let y = value_y(v);
+            if let Some((_, py)) = prev {
+                let (top, bottom) = if py <= y { (py, y) } else { (y, py) };
+                batch.fill(atlas, x - 1.0, top, 2.0, (bottom - top).max(1.0), ACCENT);
+            }
+            prev = Some((x, y));
+        }
+        x += 2.0;
+    }
+    for (ki, key) in ch.keys.iter().enumerate() {
+        let x = f.axis.x(key.t);
+        if x < plot.x - 2.0 || x > plot.x + plot.w + 2.0 {
+            continue;
+        }
+        let Some(v) = crate::curve::component(key.v, ed.curve_axis) else {
+            continue;
+        };
+        let y = value_y(v);
+        let selected = ed.selected_key == Some((ci, ki));
+        let r = if selected { 5.0 } else { 4.0 };
+        batch.fill_quad(
+            atlas,
+            [[x, y - r], [x + r, y], [x, y + r], [x - r, y]],
+            if selected { KEY } else { ACCENT },
+        );
+        // Bezier handles of the selected key's outgoing segment, drawn but not yet draggable.
+        if selected
+            && let cinematix_anim::Interp::Bezier { out, .. } = key.interp
+            && let Some(next) = ch.keys.get(ki + 1)
+        {
+            let nx = f.axis.x(next.t);
+            let nv = crate::curve::component(next.v, ed.curve_axis).unwrap_or(v);
+            let ny = value_y(nv);
+            let hx = x + (nx - x) * out[0].clamp(0.0, 1.0);
+            let hy = y + (ny - y) * out[1];
+            batch.fill(atlas, hx - 1.0, hy - 1.0, 3.0, 3.0, KEY);
+            let _ = (hx, hy, ny);
+        }
+    }
+}
+
+fn centered(batch: &mut HudBatch, atlas: &HudAtlas, f: &Frame, key: &str) {
+    let label = Text::translate(key, &[]);
+    let w = HudBatch::text_width(atlas, &label.plain());
+    text(
+        batch,
+        atlas,
+        f.curve_plot.x + (f.curve_plot.w - w) * 0.5,
+        f.curve_plot.y + f.curve_plot.h * 0.5 - 4.0,
+        &label,
+        FAINT,
     );
 }
 
