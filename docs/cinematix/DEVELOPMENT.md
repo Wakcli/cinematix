@@ -112,6 +112,8 @@ xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
   $CTL --socket $SOCK cinematix save /tmp/film.cmx
   $CTL --socket $SOCK cinematix new              # empty film, camera at the player
   $CTL --socket $SOCK cinematix load /tmp/film.cmx
+  $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film-frames
+  $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film.mp4
   $CTL --socket $SOCK ui                         # the rail buttons and the FOV sliders, by id
   $CTL --socket $SOCK screenshot /tmp/editor.png
   $CTL --socket $SOCK key escape tap             # back to Playing
@@ -120,8 +122,12 @@ xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
 '
 ```
 
+Rendering needs the world still and the renderer offscreen: launch with `HORIZON_STILL=1`, pass
+`--offscreen`, and set `options-set chunkSectionFadeInTime 0`. `cinematix render` refuses with the
+named cause while anything is left to load, and `cinematix render cancel` aborts.
+
 The same commands exist in chat as `/cinematix open|close|status|play|pause|frame N|seek S|key|
-delkey|fit|section NAME`. `cinematix` is not `screenshot-sequence`: that command refuses any screen
+delkey|fit|section NAME|render ...`. `cinematix` is not `screenshot-sequence`: that command refuses any screen
 but `Playing`, so `screenshot` is the capture path while the editor is open. The screenshot is the
 surface size, not a requested resolution.
 

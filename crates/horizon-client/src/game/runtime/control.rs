@@ -380,6 +380,7 @@ impl Game<'_> {
     ) -> Result<Option<Value>> {
         let words: Vec<&str> = line.split_whitespace().collect();
         self.screenshot_sequence_gate(words.first().copied())?;
+        self.cinematix_render_gate(&words)?;
         if words.first() == Some(&"screenshot-sequence") {
             return self.screenshot_sequence_command(line, reply);
         }
@@ -434,10 +435,12 @@ impl Game<'_> {
         if let Some(value) = self.studio_control(&words)? {
             return Ok(Some(value));
         }
-        if words.first().copied() == Some("cinematix")
-            && let Some(value) = self.cinematix_control(&words[1..])?
-        {
-            return Ok(Some(value));
+        if words.first().copied() == Some("cinematix") {
+            // A deferred reply (a render) sends its own answer when the last frame is written.
+            return match self.cinematix_control(&words[1..], Some(reply))? {
+                Some(value) => Ok(Some(value)),
+                None => Ok(None),
+            };
         }
         match self.agent_command(&words, line, reply, event_loop)? {
             super::agent::Handled::Reply(value) => return Ok(Some(value)),

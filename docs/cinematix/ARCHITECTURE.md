@@ -202,12 +202,30 @@ for frame in range:
 `cinematix-render` already builds the job, sample times and ffmpeg arguments, and covers H.264,
 HEVC, ProRes 422, ProRes 4444 and PNG sequences, with alpha only where the codec carries it.
 
-Two limits found by running the engine, both recorded in [AUDIT.md](AUDIT.md):
+Implemented as `game/interface/cinematix_export.rs` and reachable as
+`cinematix render START END FPS WIDTH HEIGHT PATH`:
 
-- `screenshot-sequence` output is the **surface size**, so arbitrary 1440p/4K needs an explicit
-  offscreen target that is not tied to the window. That is the first real renderer work.
-- The deterministic guards reject a run that has not settled, and can reject the first attempt.
-  A render job must retry the precondition rather than fail.
+- The renderer must be offscreen (`--offscreen`). `Renderer::resize` then retargets the offscreen
+  colour and depth textures, so a frame is drawn at the requested size instead of the window's;
+  a window's surface keeps following the window. The size is restored when the job ends.
+- One frame per redraw: the playhead is set to `frame / fps`, the ordinary frame path draws with the
+  film camera, the readback is saved as `frame_%06d.png`, then the next frame starts. The editor's
+  own UI is not drawn during the job and input is ignored.
+- `PATH` is a directory of PNGs, or a video file: its frames go to `<stem>.frames/` and FFmpeg
+  encodes the finished sequence through `cinematix_render::image_sequence_args` (H.264 here;
+  the crate's codec matrix covers HEVC and ProRes).
+- Preconditions are named: the world must be still (`HORIZON_STILL=1` or `/tick freeze`), loaded
+  with no streaming, uploads, backlog or dirty sections left, chunk fade 0, far terrain off, TAA
+  and frame generation off. The same stillness helper backs `screenshot-sequence`.
+- Control commands other than `quit`, `help`, status reads and `cinematix render cancel` are
+  refused while a job runs, so the world and the film cannot change mid-render.
+
+Limits that remain:
+
+- The readback is synchronous per frame and FFmpeg runs once at the end, so there is no encoder
+  streaming, no resume, and a long 4K job blocks the game thread between frames.
+- `screenshot-sequence` itself still writes the surface size; `cinematix render` is the
+  arbitrary-resolution path.
 
 ## 10. Project format
 

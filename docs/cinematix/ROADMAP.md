@@ -133,10 +133,18 @@ added deliberately, with FBX behind a feature, and the choice recorded here when
 |---|---|
 | Job, range, subframe sampling, ffmpeg arguments | done — `cinematix-render`, 9 tests |
 | Codec matrix incl. alpha | done |
-| Arbitrary-resolution offscreen target | todo — current capture is surface-sized |
-| Readback ring and encoder streaming | todo |
-| Resume and cancellation | partial — progress model exists |
-| Byte-identical repeatability | not proven |
+| `cinematix render START END FPS WIDTH HEIGHT PATH` in chat and ctl | done |
+| Arbitrary-resolution offscreen target | done — `Renderer::resize` retargets the offscreen frame; 320x180, 1920x1080 and 3840x2160 verified |
+| Readback ring and encoder streaming | partial — one synchronous readback per frame; FFmpeg encodes the finished PNG sequence |
+| Resume and cancellation | partial — `cinematix render cancel`; no resume |
+| Byte-identical repeatability | proven — two runs of a static film produced identical SHA-256 per frame |
+
+Verified headless (HORIZON_STILL=1, `--offscreen`, chunk fade 0): `cinematix render 0 6 24 320 180`
+wrote 6 PNGs at 320x180, each 83 241 bytes; a second run to another folder was byte-identical
+(equal SHA-256 for all three frames tested). 1920x1080 wrote two 747 831-byte frames, 3840x2160 one
+2 272 269-byte frame, all with the surface still 956x1032 afterwards; `render ... /tmp/x.mp4`
+produced a 320x180 24 fps 6-frame H.264 file (ffprobe). With the editor closed the command refuses,
+and a world with 984 dirty sections is refused with that count instead of writing half a film.
 
 ## Phase 9 — project format
 

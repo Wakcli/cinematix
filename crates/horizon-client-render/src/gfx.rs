@@ -4899,6 +4899,12 @@ impl Renderer {
             self.configure_surface();
         }
     }
+    /// Whether frames go to an offscreen target (`--offscreen`) instead of a window's surface.
+    /// An offscreen renderer can be resized to any drawable size, which is what a render job at
+    /// a resolution other than the window's uses.
+    pub fn offscreen(&self) -> bool {
+        self.surface.is_none()
+    }
     /// Follows the window to `width` x `height`. A size the swapchain can't take
     /// ([`drawable_size`]) keeps the last one and draws nothing until the next.
     pub fn resize(&mut self, width: u32, height: u32) {

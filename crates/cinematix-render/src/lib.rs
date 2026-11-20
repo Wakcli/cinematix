@@ -166,6 +166,21 @@ pub fn png_pattern(dir: &str, prefix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::image_sequence_args;
+
+    #[test]
+    fn an_image_sequence_names_every_frame_and_the_codec() {
+        let args = image_sequence_args("/tmp/frames", "/tmp/out.mp4", 60, Codec::H264);
+        assert!(args.iter().any(|a| a == "-framerate"));
+        assert!(args.iter().any(|a| a == "60"));
+        assert!(args.iter().any(|a| a == "/tmp/frames/frame_%06d.png"));
+        assert!(args.iter().any(|a| a == "libx264"));
+        assert_eq!(args.last().unwrap(), "/tmp/out.mp4");
+        let png = image_sequence_args("/tmp/frames", "/tmp/out", 24, Codec::PngSequence);
+        assert!(!png.iter().any(|a| a == "-c:v"));
+        assert_eq!(png.last().unwrap(), "/tmp/out");
+    }
+
     use super::*;
 
     fn job() -> RenderJob {
@@ -252,4 +267,41 @@ mod tests {
         assert_eq!(j.output.bitrate_bytes_per_sec(), 1920 * 1080 * 4 * 24);
         assert_eq!(j.total_bytes(), 48 * 1920 * 1080 * 4);
     }
+}
+
+/// FFmpeg's arguments for a finished PNG sequence: `frame_%06d.png` in `directory`, at `fps`,
+/// into `output` with the codec's encoder. `-start_number` is 0 because the renderer writes
+/// `frame_000000.png` first.
+pub fn image_sequence_args(
+    directory: &str,
+    output: &str,
+    fps: u32,
+    codec: Codec,
+) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-framerate".into(),
+        fps.to_string(),
+        "-start_number".into(),
+        "0".into(),
+        "-i".into(),
+        format!("{directory}/frame_%06d.png"),
+    ];
+    match codec.encoder() {
+        Some(encoder) => {
+            a.extend(["-c:v".into(), encoder.into()]);
+            if matches!(codec, Codec::ProRes422) {
+                a.extend(["-profile:v".into(), "2".into()]);
+            }
+            if matches!(codec, Codec::ProRes4444) {
+                a.extend(["-profile:v".into(), "4".into()]);
+            }
+            a.extend(["-pix_fmt".into(), codec.pixel_format().into(), "-y".into()]);
+        }
+        None => {}
+    }
+    a.push(output.to_owned());
+    a
 }

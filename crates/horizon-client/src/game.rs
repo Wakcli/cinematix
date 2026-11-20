@@ -1768,6 +1768,8 @@ struct Game<'a> {
     pub(super) cinematix: cinematix_editor::Editor,
     /// The pointer position the editor's right-button look last saw, while it is held.
     pub(super) cinematix_look: Option<(f32, f32)>,
+    /// A running `cinematix render` (game/interface/cinematix_export.rs).
+    pub(super) cinematix_export: Option<cinematix_export::Render>,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
@@ -5122,7 +5124,12 @@ impl Game<'_> {
                     horizon_client::screen_draw::RenderPhase::Foreground,
                 );
             }
-            Screen::Cinematix => self.draw_cinematix(&mut batch),
+            Screen::Cinematix => {
+                // A render draws the film, not the editor around it.
+                if self.cinematix_export.is_none() {
+                    self.draw_cinematix(&mut batch);
+                }
+            }
             Screen::Inventory => {
                 let from = batch.vertices.len();
                 self.draw_inventory(&mut batch);
@@ -7856,6 +7863,9 @@ impl Game<'_> {
         self.world.modified = modified;
     }
     fn render(&mut self) -> Result<bool> {
+        if self.cinematix_export.is_some() {
+            return self.render_cinematix_frame();
+        }
         if self.screenshot_sequence.is_some() {
             return self.render_sequence_frame();
         }
@@ -8579,7 +8589,12 @@ impl Game<'_> {
         pack_inputs.frame_timing = self
             .screenshot_sequence
             .as_ref()
-            .map(screenshot_sequence::Sequence::timing);
+            .map(screenshot_sequence::Sequence::timing)
+            .or_else(|| {
+                self.cinematix_export
+                    .as_ref()
+                    .map(cinematix_export::Render::timing)
+            });
         pr.lap("pr_shader_inputs");
         // Fog hooks may clear particles too. They must run before the final clear
         // boundary, not while constructing Frame after geometry has been extracted.
@@ -10921,6 +10936,7 @@ impl<'a> Game<'a> {
             studio: Default::default(),
             cinematix: Default::default(),
             cinematix_look: None,
+            cinematix_export: None,
             lan: None,
             integrated: None,
             level_shapes: Default::default(),

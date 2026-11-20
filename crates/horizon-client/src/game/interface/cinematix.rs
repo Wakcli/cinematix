@@ -8,6 +8,7 @@ use cinematix_editor::{EditorKey, Interp, KeyResult, Mods, Prop, Section};
 use glam::Vec3;
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 use winit::keyboard::KeyCode;
 
@@ -138,6 +139,9 @@ impl Game<'_> {
 
     /// A key while the editor is up: the editor's shortcuts, and nothing reaches the world.
     pub(super) fn cinematix_key(&mut self, key: KeyCode) {
+        if self.cinematix_export.is_some() {
+            return;
+        }
         if key == KeyCode::F8 {
             self.close_cinematix_screen();
             return;
@@ -169,6 +173,9 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix {
             return false;
         }
+        if self.cinematix_export.is_some() {
+            return true;
+        }
         if button == winit::event::MouseButton::Right {
             self.cinematix_look = pressed.then_some(self.cursor);
             return true;
@@ -189,6 +196,9 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix {
             return false;
         }
+        if self.cinematix_export.is_some() {
+            return true;
+        }
         if let Some(last) = self.cinematix_look {
             let (dx, dy) = (self.cursor.0 - last.0, self.cursor.1 - last.1);
             self.cinematix_look = Some(self.cursor);
@@ -207,13 +217,15 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix {
             return false;
         }
-        self.cinematix.wheel(ticks, ctrl);
+        if self.cinematix_export.is_none() {
+            self.cinematix.wheel(ticks, ctrl);
+        }
         true
     }
 
     /// Playback advances once per drawn frame, while the editor is open and playing.
     pub(super) fn cinematix_tick(&mut self, elapsed: Duration) {
-        if self.screen != Screen::Cinematix {
+        if self.screen != Screen::Cinematix || self.cinematix_export.is_some() {
             return;
         }
         let dt = elapsed.as_secs_f32().min(0.1);
@@ -255,7 +267,7 @@ impl Game<'_> {
             self.system_message(Text::translate("horizon.cinematix.usage", &[]));
             return true;
         }
-        let reply = match self.cinematix_control(&words) {
+        let reply = match self.cinematix_control(&words, None) {
             Ok(Some(value)) => value,
             Ok(None) => json!({ "ok": false, "error": "unknown cinematix subcommand" }),
             Err(error) => json!({ "ok": false, "error": error.to_string() }),
@@ -274,9 +286,20 @@ impl Game<'_> {
                 "new" => "horizon.cinematix.new",
                 "interp" => "horizon.cinematix.interp",
                 "channel" => "horizon.cinematix.channel",
+                "render" => "horizon.cinematix.render_started",
                 "camera" if words.get(1) == Some(&"pose") => "horizon.cinematix.pose",
                 _ => "horizon.cinematix.status",
             };
+            if words[0] == "render" {
+                self.system_message(Text::tr(
+                    key,
+                    &[
+                        &reply["frames"].as_u64().unwrap_or_default(),
+                        &reply["path"].as_str().unwrap_or_default(),
+                    ],
+                ));
+                return true;
+            }
             let detail = match (words[0], key) {
                 ("save" | "load", _) => reply["path"].as_str().unwrap_or_default().to_owned(),
                 _ => reply["frame"].as_i64().unwrap_or_default().to_string(),
@@ -291,7 +314,11 @@ impl Game<'_> {
 
     /// `horizon-ctl cinematix ...` and `/cinematix ...`: one command surface for the headless
     /// harness and chat.
-    pub(super) fn cinematix_control(&mut self, words: &[&str]) -> Result<Option<Value>> {
+    pub(super) fn cinematix_control(
+        &mut self,
+        words: &[&str],
+        reply: Option<&Sender<String>>,
+    ) -> Result<Option<Value>> {
         let Some(sub) = words.first().copied() else {
             return Ok(Some(json!({ "ok": false, "error": "missing subcommand" })));
         };
@@ -420,6 +447,28 @@ impl Game<'_> {
                     }
                     Err(error) => Ok(Some(json!({ "ok": false, "error": error }))),
                 }
+            }
+            "render" => {
+                if words.get(1) == Some(&"cancel") {
+                    let running = self.cinematix_export.is_some();
+                    self.end_cinematix_render(Err("cancelled".into()));
+                    return Ok(Some(json!({ "ok": true, "cancelled": running })));
+                }
+                let numbers: Option<Vec<u32>> =
+                    words.get(1..6).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                let Some(v) = numbers.filter(|v| v.len() == 5) else {
+                    return Ok(Some(json!({
+                        "ok": false,
+                        "error": "render needs START END FPS WIDTH HEIGHT PATH",
+                    })));
+                };
+                let Some(path) = words.get(6) else {
+                    return Ok(Some(json!({
+                        "ok": false,
+                        "error": "render needs START END FPS WIDTH HEIGHT PATH",
+                    })));
+                };
+                return self.start_cinematix_render(v[0], v[1], v[2], v[3], v[4], path, reply);
             }
             "new" => {
                 self.cinematix.adopt_document(cinematix_editor::Document::new());

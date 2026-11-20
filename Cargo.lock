@@ -1878,6 +1878,7 @@ dependencies = [
  "cap-std",
  "chrono",
  "cinematix-editor",
+ "cinematix-render",
  "crc32fast",
  "flate2",
  "fs4",

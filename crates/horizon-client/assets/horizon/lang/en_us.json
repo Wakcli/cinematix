@@ -1396,5 +1396,8 @@
   "horizon.cinematix.new": "New film.",
   "horizon.cinematix.interp": "Key interpolation set to %s.",
   "horizon.cinematix.pose": "Camera placed at frame %s.",
-  "horizon.cinematix.channel": "Camera channel %s selected."
+  "horizon.cinematix.channel": "Camera channel %s selected.",
+  "horizon.cinematix.render_started": "Rendering %s frames into %s.",
+  "horizon.cinematix.render_done": "Rendered %s frames into %s.",
+  "horizon.cinematix.render_error": "Render failed: %s"
 }

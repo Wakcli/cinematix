@@ -199,6 +199,8 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
             max: 86_400.0,
         },
     );
+    let render = literal(&mut d, root, "render");
+    argument(&mut d, render, "args", ArgType::Greedy);
     let save = literal(&mut d, root, "save");
     argument(&mut d, save, "path", ArgType::Greedy);
     let load = literal(&mut d, root, "load");
