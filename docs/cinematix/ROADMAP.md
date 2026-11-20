@@ -31,7 +31,7 @@ restoring everything.
 | Dock tree and panel widget | partial — dock logic exists in `cinematix-ui`; the inspector is a fixed column, not dockable |
 | Overlay card, context menu | todo |
 | Numeric scrubber | done — drawn with a track; drag with Shift ×10 and Ctrl ÷10 |
-| Viewport: live world + editor camera | partial — the editor draws over the live world; its own camera control is the next slice |
+| Viewport: live world + editor camera | done — the film camera renders while the screen is open; WASD/E/Q fly, right-drag look, FOV live |
 | Timeline: ruler, playhead, key rows, transport | done — drawn, scrubbable, keys move in time |
 | Channel list and key insertion/deletion | done — `Document`, `K`, `X`, `Delete`, rows |
 | Save/load the film (`.cmx`) | todo — the document is in memory only; closing the screen keeps it |
@@ -43,6 +43,12 @@ inserted and drawn at the playhead, `ui` listed the eight rail buttons and the f
 answered `Cinematix: frame 48.` in chat. A second session compared `state` before and after:
 position, yaw, pitch and eye identical; `pointer_grabbed` true -> false -> true; `ticks` 30 -> 112
 (the world kept running, as designed); the HUD is absent from the screenshot.
+
+Camera slice, verified headless: on opening, `cinematix status` reported the camera at the player's
+eye (`-4.5 66.615 6.5`, yaw 0, pitch 0, fov 70); holding W for one second moved it to z 14.57
+(8.07 m at 8 m/s); `cinematix camera player` put it back at z 6.5; `set field-of-view 0.5` moved
+the registered slider and `cinematix status` then reported fov 90, with the screenshot visibly
+wider. The player's eye, yaw and pitch were identical before and after the session.
 
 
 ## Phase 3 — timeline and animation
@@ -65,7 +71,7 @@ current set covers the practical cases and adding modes is a small, tested chang
 |---|---|
 | Scene graph, node kinds, rest transforms | done — `cinematix-scene` |
 | Camera data (fov, focus, aperture) | done as data |
-| Camera rigs: free, orbit, dolly, rail, spline | partial — free and spline exist in `studio/` |
+| Camera rigs: free, orbit, dolly, rail, spline | partial — the film camera preview and free fly are done; spline exists in `studio/`; orbit, dolly and rail are todo |
 | Constraints, shake, blending | todo |
 | Gizmos, selection, path rendering | partial — `studio/path_render.rs` |
 | Spline paths, Catmull-Rom, arc length | partial — `studio/spline.rs`; arc-length parameterisation todo |

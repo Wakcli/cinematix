@@ -104,6 +104,11 @@ xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
   $CTL --socket $SOCK cinematix status           # open: true, screen: cinematix
   $CTL --socket $SOCK cinematix frame 48         # playhead at frame 48 (2.00 s at 24 fps)
   $CTL --socket $SOCK cinematix key              # one key on the selected channel
+  $CTL --socket $SOCK key w down                 # fly the film camera forward (E/Q rise/fall)
+  sleep 1
+  $CTL --socket $SOCK key w up
+  $CTL --socket $SOCK set field-of-view 0.5      # registered slider: the view widens to 90
+  $CTL --socket $SOCK cinematix camera player    # back to the player's eye
   $CTL --socket $SOCK ui                         # the rail buttons and the FOV sliders, by id
   $CTL --socket $SOCK screenshot /tmp/editor.png
   $CTL --socket $SOCK key escape tap             # back to Playing

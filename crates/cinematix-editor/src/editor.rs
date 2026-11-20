@@ -1,7 +1,9 @@
 use crate::document::Document;
 use crate::frame::Frame;
+use cinematix_anim::{Prop, Value};
 use cinematix_timeline::{Playhead, Snap, snap_t};
 use cinematix_ui::Mods;
+use glam::{Quat, Vec3};
 
 pub const MIN_SPAN: f64 = 1.0 / 120.0;
 
@@ -517,6 +519,13 @@ impl Editor {
         }
         for (field, r) in &f.fields {
             if r.contains(pos.0, pos.1) {
+                // A click on the track sets the value from the position, as
+                // `AbstractSliderButton` does, and a drag then scrubs from there.
+                let (min, max, step) = field.range();
+                let track = (r.w - 8.0).max(1.0);
+                let frac = f64::from((pos.0 - r.x - 4.0) / track);
+                let scrub = cinematix_ui::Scrubber::new(field.get(&self.doc), min, max, step);
+                field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
                 self.drag = Some(Drag::Number {
                     field: *field,
                     start: field.get(&self.doc),
@@ -645,6 +654,143 @@ impl Editor {
         matches!(self.drag, Some(Drag::Number { field: dragged, .. }) if dragged == field)
     }
 
+    /// The camera node's pose at `t`: the animated value when the channel holds keys, the rest
+    /// value otherwise.
+    pub fn camera_at(&self, t: f64) -> Option<(Vec3, Quat)> {
+        let id = self.doc.scene.camera;
+        let node = self.doc.node(id)?;
+        let mut position = node.rest.translation;
+        let mut rotation = node.rest.rotation;
+        if let Some(ci) = self.doc.channel_index(id, Prop::Translation)
+            && let Some(Value::Vec3(v)) = self.doc.value_at(ci, t)
+        {
+            position = Vec3::from_array(v);
+        }
+        if let Some(ci) = self.doc.channel_index(id, Prop::Rotation)
+            && let Some(Value::Quat(q)) = self.doc.value_at(ci, t)
+        {
+            rotation = Quat::from_array(q).normalize();
+        }
+        Some((position, rotation))
+    }
+
+    /// What the renderer should look through while the editor is open: the camera at the
+    /// playhead, as `camera_view` hands it over.
+    pub fn preview_view(&self) -> Option<([f64; 3], f32, f32)> {
+        let (position, rotation) = self.camera_at(self.playhead.t)?;
+        let (yaw, pitch) = view_from_rotation(rotation);
+        Some((
+            [
+                f64::from(position.x),
+                f64::from(position.y),
+                f64::from(position.z),
+            ],
+            yaw,
+            pitch,
+        ))
+    }
+
+    /// The camera's field of view at the playhead.
+    pub fn preview_fov(&self) -> f32 {
+        let id = self.doc.scene.camera;
+        if let Some(ci) = self.doc.channel_index(id, Prop::Fov)
+            && let Some(Value::F32(v)) = self.doc.value_at(ci, self.playhead.t)
+        {
+            return v;
+        }
+        match self.doc.camera_data() {
+            Some(c) => c.fov_deg,
+            None => 70.0,
+        }
+    }
+
+    /// Adopts a pose as the camera's pose. Without `force` a keyed camera is left alone:
+    /// opening the editor over a film must not move it. With `force` a keyed pose becomes a key
+    /// at the playhead, so the reset is itself part of the animation.
+    pub fn take_pose(&mut self, position: Vec3, yaw: f32, pitch: f32, force: bool) -> bool {
+        let rotation = rotation_from_view(yaw, pitch);
+        if !force && self.doc.camera_keyed() {
+            return false;
+        }
+        if self.doc.camera_keyed() {
+            let id = self.doc.scene.camera;
+            let t = self.playhead.t;
+            let mut ok = true;
+            if let Some(ci) = self.doc.channel_index(id, Prop::Translation)
+                && !self.doc.channels[ci].keys.is_empty()
+            {
+                ok &= self
+                    .doc
+                    .upsert_key(ci, t, Value::Vec3(position.to_array()))
+                    .is_some();
+            } else {
+                ok &= self.doc.set_camera_translation(position);
+            }
+            if let Some(ci) = self.doc.channel_index(id, Prop::Rotation)
+                && !self.doc.channels[ci].keys.is_empty()
+            {
+                ok &= self
+                    .doc
+                    .upsert_key(ci, t, Value::Quat(rotation.to_array()))
+                    .is_some();
+            } else {
+                ok &= self.doc.set_camera_rotation(rotation);
+            }
+            return ok;
+        }
+        self.doc.set_camera_translation(position) && self.doc.set_camera_rotation(rotation)
+    }
+
+    /// Moves the preview camera by `delta`. A translation channel that already holds keys gets a
+    /// key at the playhead instead, so a moving camera stays a moving camera.
+    pub fn nudge_camera(&mut self, delta: Vec3) -> bool {
+        let id = self.doc.scene.camera;
+        let t = self.playhead.t;
+        match self.doc.channel_index(id, Prop::Translation) {
+            Some(ci) if !self.doc.channels[ci].keys.is_empty() => {
+                let base = match self.doc.value_at(ci, t) {
+                    Some(Value::Vec3(v)) => Vec3::from_array(v),
+                    _ => Vec3::ZERO,
+                };
+                self.doc
+                    .upsert_key(ci, t, Value::Vec3((base + delta).to_array()))
+                    .is_some()
+            }
+            _ => self.doc.set_camera_translation(match self.camera_at(t) {
+                Some((position, _)) => position + delta,
+                None => delta,
+            }),
+        }
+    }
+
+    /// Turns the preview camera by degrees (positive yaw turns right, positive pitch looks
+    /// down), pitching no further than straight up or down. A keyed rotation gets a key at the
+    /// playhead instead of the rest pose.
+    pub fn look(&mut self, dyaw: f32, dpitch: f32) -> bool {
+        let id = self.doc.scene.camera;
+        let t = self.playhead.t;
+        let (_, rotation) = match self.camera_at(t) {
+            Some(pose) => pose,
+            None => return false,
+        };
+        let (yaw, pitch) = view_from_rotation(rotation);
+        let rotation = rotation_from_view(yaw + dyaw, pitch + dpitch);
+        match self.doc.channel_index(id, Prop::Rotation) {
+            Some(ci) if !self.doc.channels[ci].keys.is_empty() => self
+                .doc
+                .upsert_key(ci, t, Value::Quat(rotation.to_array()))
+                .is_some(),
+            _ => self.doc.set_camera_rotation(rotation),
+        }
+    }
+
+    /// The camera's pose, for the status reply.
+    pub fn camera_status(&self) -> Option<([f32; 3], f32, f32, f32)> {
+        let (position, rotation) = self.camera_at(self.playhead.t)?;
+        let (yaw, pitch) = view_from_rotation(rotation);
+        Some((position.to_array(), yaw, pitch, self.preview_fov()))
+    }
+
     /// The channels that hold at least one key, for the film summary.
     pub fn keyed_channels(&self) -> usize {
         self.doc
@@ -653,6 +799,30 @@ impl Editor {
             .filter(|c| !c.keys.is_empty())
             .count()
     }
+}
+
+/// The camera's orientation from its view angles, in Horizon's convention
+/// (`Camera.setRotation`: `rotationYXZ(PI - yaw, -pitch, 0)`).
+pub fn rotation_from_view(yaw: f32, pitch: f32) -> Quat {
+    Quat::from_euler(
+        glam::EulerRot::YXZ,
+        std::f32::consts::PI - yaw.to_radians(),
+        -pitch.clamp(-89.9, 89.9).to_radians(),
+        0.0,
+    )
+}
+
+/// The view angles back from an orientation: yaw in (-180, 180], pitch in (-90, 90).
+pub fn view_from_rotation(q: Quat) -> (f32, f32) {
+    let (y, x, _) = q.normalize().to_euler(glam::EulerRot::YXZ);
+    let mut yaw = (std::f32::consts::PI - y).to_degrees();
+    while yaw <= -180.0 {
+        yaw += 360.0;
+    }
+    while yaw > 180.0 {
+        yaw -= 360.0;
+    }
+    (yaw, (-x.to_degrees()).clamp(-89.9, 89.9))
 }
 
 fn window_for(r0: f64, r1: f64) -> (f64, f64) {
@@ -710,36 +880,53 @@ mod tests {
         assert!(e.press((f.viewport.x + 10.0, f.viewport.y + 10.0), Mods::default()));
     }
 
+    /// Press on the slider's handle for its current value, so a drag starts where the value is.
+    fn press_handle(e: &mut Editor, field: Field) -> cinematix_ui::Rect {
+        let f = e.frame();
+        let (_, r) = *f.fields.iter().find(|(f, _)| *f == field).unwrap();
+        let (min, max, _) = field.range();
+        let frac = ((field.get(&e.doc) - min) / (max - min)) as f32;
+        let x = r.x + 4.0 + frac * (r.w - 8.0);
+        e.press((x, r.y + 5.0), Mods::default());
+        r
+    }
+
     #[test]
     fn dragging_a_number_field_changes_the_document_value() {
         let mut e = editor();
-        let f = e.frame();
-        let (field, r) = *f.fields.first().unwrap();
-        assert_eq!(field, Field::Fov);
+        let r = press_handle(&mut e, Field::Fov);
         let before = Field::Fov.get(&e.doc);
-        e.press((r.x + 20.0, r.y + 4.0), Mods::default());
-        e.drag_to((r.x + 38.0, r.y + 4.0), Mods::default());
+        e.drag_to(
+            (
+                r.x + (r.w - 8.0) * ((before - 10.0) / 160.0) as f32 + 4.0 + 18.0,
+                r.y + 5.0,
+            ),
+            Mods::default(),
+        );
         let after = Field::Fov.get(&e.doc);
         assert!((after - (before + 3.0)).abs() < 1e-6, "{before} -> {after}");
-        assert_eq!(after.round() as i32, 73);
     }
 
     #[test]
     fn shift_makes_a_scrub_coarser_and_ctrl_finer() {
         let mut e = editor();
-        let f = e.frame();
-        let (_, r) = *f.fields.first().unwrap();
-        e.press((r.x + 10.0, r.y + 3.0), Mods::default());
-        e.drag_to((r.x + 16.0, r.y + 3.0), Mods::default());
+        let r = press_handle(&mut e, Field::Fov);
+        let before = Field::Fov.get(&e.doc);
+        let dx = 6.0;
+        let at = |r: cinematix_ui::Rect| {
+            (
+                r.x + 4.0 + ((before - 10.0) / 160.0) as f32 * (r.w - 8.0) + dx,
+                r.y + 5.0,
+            )
+        };
+        e.drag_to(at(r), Mods::default());
         let coarse = Field::Fov.get(&e.doc);
         e.release();
 
         let mut e = editor();
-        let f = e.frame();
-        let (_, r) = *f.fields.first().unwrap();
-        e.press((r.x + 10.0, r.y + 3.0), Mods::default());
+        let r = press_handle(&mut e, Field::Fov);
         e.drag_to(
-            (r.x + 16.0, r.y + 3.0),
+            at(r),
             Mods {
                 shift: true,
                 ..Default::default()
@@ -749,11 +936,9 @@ mod tests {
         e.release();
 
         let mut e = editor();
-        let f = e.frame();
-        let (_, r) = *f.fields.first().unwrap();
-        e.press((r.x + 10.0, r.y + 3.0), Mods::default());
+        let r = press_handle(&mut e, Field::Fov);
         e.drag_to(
-            (r.x + 16.0, r.y + 3.0),
+            at(r),
             Mods {
                 ctrl: true,
                 ..Default::default()
@@ -761,9 +946,9 @@ mod tests {
         );
         let fine = Field::Fov.get(&e.doc);
 
-        assert!((coarse - 71.0).abs() < 1e-6, "{coarse}");
-        assert!((shifted - 80.0).abs() < 1e-6, "{shifted}");
-        assert!((fine - 70.1).abs() < 1e-4, "{fine}");
+        assert!((coarse - (before + 1.0)).abs() < 1e-6, "{coarse}");
+        assert!((shifted - (before + 10.0)).abs() < 1e-6, "{shifted}");
+        assert!((fine - (before + 0.1)).abs() < 1e-4, "{fine}");
     }
 
     #[test]
@@ -840,6 +1025,121 @@ mod tests {
         }
         let (a, b) = e.window();
         assert!(b - a >= MIN_SPAN - 1e-12);
+    }
+
+    #[test]
+    fn view_angles_survive_the_round_trip_through_a_rotation() {
+        for yaw in [-179.0, -90.0, -30.0, 0.0, 45.0, 90.0, 179.0] {
+            for pitch in [-60.0, -10.0, 0.0, 10.0, 60.0] {
+                let q = rotation_from_view(yaw, pitch);
+                let (back_yaw, back_pitch) = view_from_rotation(q);
+                assert!((back_yaw - yaw).abs() < 0.01, "{yaw} -> {back_yaw}");
+                assert!((back_pitch - pitch).abs() < 0.01, "{pitch} -> {back_pitch}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_camera_looks_north_from_the_origin() {
+        let e = editor();
+        let (position, rotation) = e.camera_at(0.0).unwrap();
+        assert_eq!(position, Vec3::ZERO);
+        let (yaw, pitch) = view_from_rotation(rotation);
+        assert!((yaw - 180.0).abs() < 0.01, "{yaw}");
+        assert!(pitch.abs() < 0.01);
+    }
+
+    #[test]
+    fn nudging_an_unkeyed_camera_moves_its_rest_pose() {
+        let mut e = editor();
+        assert!(e.nudge_camera(Vec3::new(1.0, 2.0, 3.0)));
+        let (position, _) = e.camera_at(0.0).unwrap();
+        assert_eq!(position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(e.doc.key_count(), 0);
+    }
+
+    #[test]
+    fn nudging_a_keyed_camera_writes_a_key_and_leaves_the_rest_pose_alone() {
+        let mut e = editor();
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        e.seek_frame(24);
+        e.add_key();
+        let rest = e.doc.node(e.doc.scene.camera).unwrap().rest.translation;
+        assert!(e.nudge_camera(Vec3::new(0.0, 5.0, 0.0)));
+        assert_eq!(
+            e.doc.node(e.doc.scene.camera).unwrap().rest.translation,
+            rest
+        );
+        let value = e.doc.channels[ci].eval(1.0).unwrap();
+        match value {
+            Value::Vec3(v) => assert!((v[1] - (rest.y + 5.0)).abs() < 1e-5, "{v:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn looking_turns_the_camera_and_stops_at_straight_up_and_down() {
+        let mut e = editor();
+        assert!(e.look(30.0, 10.0));
+        let (_, yaw, pitch, _) = e.camera_status().unwrap();
+        assert!(
+            (yaw - 210.0).abs() < 0.01 || (yaw + 150.0).abs() < 0.01,
+            "{yaw}"
+        );
+        assert!((pitch - 10.0).abs() < 0.01, "{pitch}");
+        assert!(e.look(0.0, 200.0));
+        let (_, _, pitch, _) = e.camera_status().unwrap();
+        assert!(pitch <= 89.91, "{pitch}");
+    }
+
+    #[test]
+    fn taking_a_pose_is_refused_once_the_camera_is_keyed() {
+        let mut e = editor();
+        assert!(e.take_pose(Vec3::new(4.0, 80.0, -2.0), 15.0, -5.0, false));
+        let (_, yaw, pitch, _) = e.camera_status().unwrap();
+        assert!((yaw - 15.0).abs() < 0.01);
+        assert!((pitch + 5.0).abs() < 0.01);
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        e.add_key();
+        assert!(e.doc.channel(ci).is_some_and(|c| !c.keys.is_empty()));
+        assert!(!e.take_pose(Vec3::ZERO, 0.0, 0.0, false));
+        let (position, _, _, _) = e.camera_status().unwrap();
+        assert_eq!(position, [4.0, 80.0, -2.0]);
+    }
+
+    #[test]
+    fn the_preview_fov_follows_the_fov_channel() {
+        let mut e = editor();
+        let ci = e.doc.channel_index(e.doc.scene.camera, Prop::Fov).unwrap();
+        e.selected_channel = Some(ci);
+        e.seek_frame(0);
+        e.add_key();
+        e.doc.channels[ci].keys[0].v = Value::F32(35.0);
+        e.seek_frame(48);
+        assert!(e.add_key());
+        e.doc.channels[ci].keys[1].v = Value::F32(55.0);
+        e.seek(1.0);
+        assert_eq!(e.doc.channels[ci].keys.len(), 2);
+        assert!((e.preview_fov() - 45.0).abs() < 1.0, "{}", e.preview_fov());
+    }
+
+    #[test]
+    fn clicking_the_track_sets_the_field_from_the_click_position() {
+        let mut e = editor();
+        let f = e.frame();
+        let (field, r) = *f.fields.first().unwrap();
+        assert_eq!(field, Field::Fov);
+        let mid = r.x + r.w * 0.5;
+        e.press((mid, r.y + 5.0), Mods::default());
+        e.release();
+        let v = Field::Fov.get(&e.doc);
+        assert!((v - 90.0).abs() < 3.0, "{v}");
     }
 
     #[test]

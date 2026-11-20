@@ -2,7 +2,7 @@ use cinematix_anim::{Channel, Interp, Key, Prop, PropPath, Value};
 use cinematix_scene::{
     AssetId, CameraData, LightData, LightKind, Node, NodeId, NodeKind, Scene, SceneMeta, Transform,
 };
-use glam::Vec3;
+use glam::{Quat, Vec3};
 use std::collections::HashMap;
 
 const CAMERA_PROPS: [Prop; 5] = [
@@ -216,7 +216,24 @@ impl Document {
         rest_value(node, ch.target.prop)
     }
 
-    /// Inserts a key at `t`, replacing one within a frame's epsilon. Returns its index.
+    /// Writes `value` at `t`, replacing a key within a frame's epsilon. Returns its index.
+    pub fn upsert_key(&mut self, ci: usize, t: f64, value: Value) -> Option<usize> {
+        let ch = self.channels.get_mut(ci)?;
+        if let Some(i) = ch.keys.iter().position(|k| (k.t - t).abs() < 1e-9) {
+            ch.keys[i].v = value;
+            return Some(i);
+        }
+        ch.keys.push(Key {
+            t,
+            v: value,
+            interp: Interp::Smooth,
+        });
+        ch.sort();
+        ch.keys.iter().position(|k| (k.t - t).abs() < 1e-9)
+    }
+
+    /// Inserts a key at `t` holding what the channel already evaluates to, so keying never
+    /// moves the animation. Returns its index.
     pub fn insert_key(&mut self, ci: usize, t: f64) -> Option<usize> {
         let value = self.value_at(ci, t)?;
         let ch = self.channels.get_mut(ci)?;
@@ -303,6 +320,31 @@ impl Document {
             }
             None => false,
         }
+    }
+
+    pub fn set_camera_rotation(&mut self, r: Quat) -> bool {
+        match self.scene.nodes.get_mut(&self.scene.camera) {
+            Some(n) => {
+                n.rest.rotation = r.normalize();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the camera's pose is animated: either channel holds at least one key.
+    pub fn camera_keyed(&self) -> bool {
+        self.camera_channels()
+            .iter()
+            .any(|ci| self.channels[*ci].keys.len() > 0)
+    }
+
+    pub fn camera_channels(&self) -> Vec<usize> {
+        let id = self.scene.camera;
+        [Prop::Translation, Prop::Rotation]
+            .into_iter()
+            .filter_map(|p| self.channel_index(id, p))
+            .collect()
     }
 }
 

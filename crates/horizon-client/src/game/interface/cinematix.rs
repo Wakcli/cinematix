@@ -5,6 +5,7 @@
 
 use super::{Game, HudBatch, Screen};
 use cinematix_editor::{EditorKey, KeyResult, Mods, Section};
+use glam::Vec3;
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -22,6 +23,7 @@ pub const HELP: &[&str] = &[
     "cinematix fit                  fit the film's range into the timeline window",
     "cinematix section NAME         switch the inspector (camera, actors, models, lights, world,",
     "                               film, render, project)",
+    "cinematix camera player        set the film camera to the player's eye and view angles",
 ];
 
 /// What `Game::open_cinematix_screen` does over `screen` (`blocked`: an overlay, the title
@@ -76,7 +78,15 @@ impl Game<'_> {
         if let Some(open) = cinematix_screen_opens(self.screen, blocked) {
             return open;
         }
+        let pose = (self.view.eye, self.yaw, self.pitch);
         self.screen = Screen::Cinematix;
+        let position = Vec3::new(
+            pose.0[0] as f32,
+            pose.0[1] as f32,
+            pose.0[2] as f32,
+        );
+        self.cinematix.take_pose(position, pose.1, pose.2, false);
+        self.cinematix_look = None;
         self.keys.clear();
         self.left = false;
         self.right = false;
@@ -90,6 +100,7 @@ impl Game<'_> {
     pub(super) fn close_cinematix_screen(&mut self) {
         if self.screen == Screen::Cinematix {
             self.cinematix.playing = false;
+            self.cinematix_look = None;
             self.screen = Screen::Playing;
             self.capture(true);
         }
@@ -145,6 +156,10 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix {
             return false;
         }
+        if button == winit::event::MouseButton::Right {
+            self.cinematix_look = pressed.then_some(self.cursor);
+            return true;
+        }
         if button == winit::event::MouseButton::Left {
             if pressed {
                 let mods = self.cinematix_mods();
@@ -160,6 +175,13 @@ impl Game<'_> {
     pub(super) fn cinematix_mouse_dragged(&mut self) -> bool {
         if self.screen != Screen::Cinematix {
             return false;
+        }
+        if let Some(last) = self.cinematix_look {
+            let (dx, dy) = (self.cursor.0 - last.0, self.cursor.1 - last.1);
+            self.cinematix_look = Some(self.cursor);
+            let sensitivity = if self.has_control_down() { 0.04 } else { 0.15 };
+            self.cinematix
+                .look(dx * sensitivity, dy * sensitivity);
         }
         let mods = self.cinematix_mods();
         self.cinematix.drag_to(self.cursor, mods);
@@ -181,7 +203,30 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix {
             return;
         }
-        self.cinematix.advance(elapsed.as_secs_f64().min(0.1));
+        let dt = elapsed.as_secs_f32().min(0.1);
+        self.cinematix.advance(f64::from(dt));
+        if dt <= 0.0 {
+            return;
+        }
+        let held = |key| f32::from(u8::from(self.keys.raw(&key)));
+        let forward = held(KeyCode::KeyW) - held(KeyCode::KeyS);
+        let strafe = held(KeyCode::KeyD) - held(KeyCode::KeyA);
+        let vertical = held(KeyCode::KeyE) - held(KeyCode::KeyQ);
+        if forward == 0.0 && strafe == 0.0 && vertical == 0.0 {
+            return;
+        }
+        let Some((_, rotation)) = self.cinematix.camera_at(self.cinematix.time()) else {
+            return;
+        };
+        let dir = rotation * Vec3::new(strafe, 0.0, -forward) + Vec3::Y * vertical;
+        if dir.length_squared() < 1e-6 {
+            return;
+        }
+        // `mapped_key` already records the bound movement keys in `self.keys`, releases included,
+        // so this only reads: a tap cannot leave the camera drifting.
+        const SPEED: f32 = 8.0;
+        self.cinematix
+            .nudge_camera(dir.normalize() * SPEED * dt);
     }
 
     /// `/cinematix ...`: the open film's transport from chat.
@@ -263,6 +308,9 @@ impl Game<'_> {
                     "nodes": ed.doc.scene.nodes.len(),
                     "range": [r0, r1],
                     "resolution": [w, h],
+                    "camera": ed.camera_status().map(|(position, yaw, pitch, fov)| json!({
+                        "position": position, "yaw": yaw, "pitch": pitch, "fov": fov,
+                    })),
                 })))
             }
             "play" => {
@@ -313,6 +361,21 @@ impl Game<'_> {
                 let (t0, t1) = self.cinematix.window();
                 Ok(Some(json!({ "ok": true, "window": [t0, t1] })))
             }
+            "camera" => match words.get(1).copied() {
+                Some("player") => {
+                    let eye = self.view.eye;
+                    let position =
+                        Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
+                    let took = self.cinematix.take_pose(position, self.yaw, self.pitch, true);
+                    Ok(Some(json!({
+                        "ok": true, "took": took,
+                        "camera": self.cinematix.camera_status().map(|(p, yaw, pitch, fov)| json!({
+                            "position": p, "yaw": yaw, "pitch": pitch, "fov": fov,
+                        })),
+                    })))
+                }
+                _ => Ok(Some(json!({ "ok": false, "error": "camera needs player" }))),
+            },
             "section" => {
                 let Some(name) = words.get(1).copied() else {
                     return Ok(Some(json!({ "ok": false, "error": "section needs a name" })));

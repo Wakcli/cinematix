@@ -95,8 +95,18 @@ While it is open:
    `capture(true)`. The `cinematix_editor::Editor` (and so the film) stays in `Game`, not in the
    screen, so closing and reopening the screen keeps the document.
 
-The editor camera is still the player's own view: the viewport draws the live world behind the
-panels. `StudioFreecam` is the intended reuse for a detached camera, and is the next slice.
+5. **The film camera is what renders.** While the screen is open, `Game::camera_view`,
+   `Game::camera_orientation` and `Game::fov_degrees` take the pose from
+   `Editor::preview_view`/`preview_fov` (the camera node evaluated at the playhead) before any
+   player or Studio camera. The hand and the hurt/bob camera effects are suppressed through
+   `studio_draws_hand` and `camera_effects_enabled`. On opening, the camera adopts the player's
+   eye and view angles unless its channels already hold keys.
+
+In the editor, W/S/A/D fly horizontally in the camera's own frame, E and Q rise and fall, at
+8 m/s; holding the right mouse button looks around (`Ctrl` slows the look). Moving an unkeyed
+camera writes its rest pose; moving a keyed camera writes a key at the playhead, so an animated
+camera stays animated. `cinematix camera player` (`/cinematix` as well) puts the camera back at
+the player and keys it when the channels are keyed.
 
 The player's position, rotation and camera must survive a full editor session unchanged. That is a
 test, not an intention.

@@ -1766,6 +1766,8 @@ struct Game<'a> {
     pub(super) studio: studio::Studio,
     /// Cinematix's film document and editor state (game/interface/cinematix.rs).
     pub(super) cinematix: cinematix_editor::Editor,
+    /// The pointer position the editor's right-button look last saw, while it is held.
+    pub(super) cinematix_look: Option<(f32, f32)>,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
@@ -5200,6 +5202,11 @@ impl Game<'_> {
     /// `Camera.setRotation`: the camera's orientation, turned round in
     /// third-person front view.
     pub(super) fn camera_orientation(&self) -> glam::Quat {
+        if self.screen == Screen::Cinematix
+            && let Some((_, yaw, pitch)) = self.cinematix.preview_view()
+        {
+            return camera_rotation(horizon_client::camera::CameraType::FirstPerson, yaw, pitch);
+        }
         if self.studio.flying() {
             return camera_rotation(
                 horizon_client::camera::CameraType::FirstPerson,
@@ -8359,7 +8366,10 @@ impl Game<'_> {
         } else {
             self.fov_degrees(camera_alpha as f32, camera.to_array())
         };
-        let camera_effects = fov::camera_effects_enabled(title, self.studio.flying());
+        let camera_effects = fov::camera_effects_enabled(
+            title,
+            self.studio.flying() || self.screen == Screen::Cinematix,
+        );
         let bob = if !camera_effects {
             glam::Mat4::IDENTITY
         } else {
@@ -10910,6 +10920,7 @@ impl<'a> Game<'a> {
             replay: Default::default(),
             studio: Default::default(),
             cinematix: Default::default(),
+            cinematix_look: None,
             lan: None,
             integrated: None,
             level_shapes: Default::default(),

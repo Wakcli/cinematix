@@ -154,6 +154,9 @@ impl Game<'_> {
     }
     /// `Camera.calculateFov` with `modifyFovBasedOnDeathOrFluid`.
     pub(super) fn fov_degrees(&self, partial: f32, camera: [f64; 3]) -> f32 {
+        if self.screen == super::Screen::Cinematix {
+            return self.cinematix.preview_fov().clamp(1.0, 179.0);
+        }
         if self.studio.flying() {
             return self.studio.freecam.fov.clamp(1.0, 179.0);
         }

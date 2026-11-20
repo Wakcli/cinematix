@@ -199,6 +199,8 @@ fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
             max: 86_400.0,
         },
     );
+    let camera = literal(&mut d, root, "camera");
+    literal(&mut d, camera, "player");
     let section = literal(&mut d, root, "section");
     argument(
         &mut d,
