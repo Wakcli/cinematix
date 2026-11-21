@@ -502,7 +502,7 @@ impl Frame {
             && cy + 20.0 <= transport.y
         {
             let track = Rect::new(lanes.x + 8.0, cy + 4.0, (lanes.w - 16.0).max(20.0), 14.0);
-            let (r0, r1) = doc.scene.meta.range;
+            let (r0, r1) = doc.playback_range();
             let span = (r1 - r0).max(1e-9);
             let x_at = |t: f64| track.x + (((t - r0) / span).clamp(0.0, 1.0) as f32) * track.w;
             for (edge, t) in [(0u8, clip.start), (1u8, clip.end)] {

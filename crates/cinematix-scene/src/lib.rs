@@ -171,6 +171,9 @@ pub struct SceneMeta {
     pub author: String,
     pub fps: f32,
     pub range: (f64, f64),
+    /// No fixed editing end. Older films retain their explicitly stored range.
+    #[serde(default)]
+    pub open_ended: bool,
     pub resolution: (u32, u32),
     #[serde(default)]
     pub environment: EnvironmentData,

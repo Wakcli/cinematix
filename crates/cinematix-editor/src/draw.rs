@@ -188,6 +188,21 @@ fn icon_button(
 
 pub fn draw(ed: &Editor, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
     let f = ed.frame();
+    if ed.bend_segment().is_some() {
+        let label = Text::translate("cinematix.viewport.frame_curve", &[]);
+        let w = HudBatch::text_width(atlas, &label.plain());
+        if w + 16.0 < f.viewport.w && f.viewport.h > 22.0 {
+            let x = f.viewport.x + 8.0;
+            let y = f.viewport.y + 8.0;
+            fill(
+                batch,
+                atlas,
+                Rect::new(x - 4.0, y - 3.0, w + 8.0, 15.0),
+                PANEL_BG,
+            );
+            text(batch, atlas, x, y, &label, TEXT);
+        }
+    }
     let tool = draw_header(ed, &f, batch, atlas, cursor);
     let hovered = draw_rail(ed, &f, batch, atlas, cursor);
     if !f.inspector_floating {
@@ -567,14 +582,20 @@ fn draw_field(
         ((v - min) / (max - min)) as f32
     };
     let label = Text::translate(field.label(), &[]);
-    let value = format!("{}{}", field.text(&ed.doc), field.unit());
+    let value = if field == Field::FilmLength && ed.doc.scene.meta.open_ended {
+        Text::translate("cinematix.film.unlimited", &[]).plain()
+    } else {
+        format!("{}{}", field.text(&ed.doc), field.unit())
+    };
     let hover = r.contains(cursor.0, cursor.1);
     let held = ed.dragging_field(field);
     if field == Field::Time {
         draw_time_field(batch, atlas, r, &label, &value, frac, hover, held);
     } else {
         box_frame(batch, atlas, r);
-        bar(batch, atlas, r, frac, false);
+        if field != Field::FilmLength {
+            bar(batch, atlas, r, frac, false);
+        }
         left_label(
             batch,
             atlas,

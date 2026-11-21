@@ -5,7 +5,7 @@
 
 use super::{BendDrag, Game, HudBatch, Screen};
 use cinematix_editor::{EditorKey, Interp, KeyResult, Mods, Prop, Section};
-use glam::{Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use horizon_client::gizmos::{Gizmos, Line};
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
@@ -141,6 +141,7 @@ impl Game<'_> {
             return;
         }
         self.cinematix.resize(batch.width, batch.height);
+        self.draw_cinematix_path(batch);
         cinematix_editor::draw(&self.cinematix, batch, &self.gui.atlas, self.cursor);
     }
 
@@ -167,6 +168,11 @@ impl Game<'_> {
         }
         if mods.ctrl && key == KeyCode::KeyY {
             self.cinematix.redo();
+            return;
+        }
+        if mods.shift && key == KeyCode::KeyF {
+            self.cinematix_bend = None;
+            self.cinematix.frame_bend_segment();
             return;
         }
         let result = match editor_key {
@@ -209,14 +215,11 @@ impl Game<'_> {
         if button == winit::event::MouseButton::Left {
             if pressed {
                 let mods = self.cinematix_mods();
-                if {
+                self.cinematix_bend = self.pick_cinematix_bend();
+                if self.cinematix_bend.is_none() {
                     self.cinematix.press(self.cursor, mods);
-                    self.cinematix.can_pick_bend(self.cursor)
-                } {
-                    self.cinematix_bend = self.pick_cinematix_bend();
-                    if self.cinematix_bend.is_some() {
-                        self.cinematix.checkpoint();
-                    }
+                } else {
+                    self.cinematix.playing = false;
                 }
             } else {
                 self.cinematix_bend = None;
@@ -226,36 +229,111 @@ impl Game<'_> {
         true
     }
 
-    fn pick_cinematix_bend(&self) -> Option<BendDrag> {
+    fn bend_handles(&self, projection: PathProjection) -> impl Iterator<Item = ProjectedBend> + '_ {
         let ed = &self.cinematix;
         let frame = ed.frame();
-        if !ed.preview_free || !frame.viewport.contains(self.cursor.0, self.cursor.1) {
+        ed.camera_bend_handles()
+            .filter_map(move |(segment, midpoint)| {
+                if !ed.preview_free {
+                    return None;
+                }
+                let local = projection.local(midpoint.to_array().map(f64::from));
+                let pixel = projection.project(local)?;
+                if !frame.viewport.contains(pixel.x, pixel.y)
+                    || frame.inspector.contains(pixel.x, pixel.y)
+                {
+                    return None;
+                }
+                Some(ProjectedBend {
+                    segment,
+                    midpoint,
+                    pixel,
+                    units_per_pixel: -local.z / projection.focal,
+                })
+            })
+    }
+
+    fn pick_cinematix_bend(&self) -> Option<BendDrag> {
+        let ed = &self.cinematix;
+        if !ed.can_pick_bend(self.cursor) {
             return None;
         }
-        let segment = ed.bend_segment()?;
-        let midpoint = ed.camera_at((segment.0 + segment.1) * 0.5)?.0;
-        let (eye, yaw, pitch) = ed.preview_view()?;
-        let view = horizon_client::camera::view_matrix(yaw, pitch);
-        let local = view.transform_vector3(midpoint - Vec3::from_array(eye.map(|v| v as f32)));
-        if local.z >= -0.05 {
-            return None;
-        }
-        let fov = ed.preview_fov().clamp(1.0, 179.0).to_radians();
-        let units_per_pixel = -2.0 * local.z * (fov * 0.5).tan() / frame.size.1;
-        let x = frame.size.0 * 0.5 + local.x / units_per_pixel;
-        let y = frame.size.1 * 0.5 - local.y / units_per_pixel;
-        if (self.cursor.0 - x).hypot(self.cursor.1 - y) > 12.0 {
-            return None;
-        }
-        let inverse = view.transpose();
+        let projection = PathProjection::new(ed)?;
+        let handle = closest_bend(self.bend_handles(projection), Vec2::from(self.cursor))?;
+        let inverse = projection.view.transpose();
         Some(BendDrag {
-            segment,
+            segment: handle.segment,
             cursor: self.cursor,
-            midpoint,
+            midpoint: handle.midpoint,
             right: inverse.transform_vector3(Vec3::X),
             up: inverse.transform_vector3(Vec3::Y),
-            units_per_pixel,
+            units_per_pixel: handle.units_per_pixel,
+            moved: false,
         })
+    }
+
+    fn draw_cinematix_path(&self, batch: &mut HudBatch) {
+        let Some(projection) = PathProjection::new(&self.cinematix) else {
+            return;
+        };
+        let mut g = Gizmos::default();
+        self.cinematix_camera_path(&mut g);
+        let atlas = &self.gui.atlas;
+        let start = batch.vertices.len();
+        for line in g.on_top {
+            let Some((a, b)) = projection.line(line.start, line.end) else {
+                continue;
+            };
+            let delta = b - a;
+            let len = delta.length();
+            if len < 0.01 || !len.is_finite() {
+                continue;
+            }
+            let normal = Vec2::new(-delta.y, delta.x) * (line.width * 0.5 / len);
+            batch.fill_quad(
+                atlas,
+                [a - normal, b - normal, b + normal, a + normal].map(|p| p.to_array()),
+                hud_colour(line.color),
+            );
+        }
+        let handles = self.bend_handles(projection).collect::<Vec<_>>();
+        let hovered = if let Some(drag) = &self.cinematix_bend {
+            Some(drag.segment)
+        } else if self.cinematix.can_pick_bend(self.cursor) {
+            closest_bend(handles.iter().copied(), Vec2::from(self.cursor)).map(|h| h.segment)
+        } else {
+            None
+        };
+        // Draw the hovered or dragged handle last when markers overlap.
+        for handle in handles
+            .iter()
+            .filter(|h| Some(h.segment) != hovered)
+            .chain(handles.iter().filter(|h| Some(h.segment) == hovered))
+        {
+            let pixel = handle.pixel;
+            let highlighted = Some(handle.segment) == hovered;
+            let diamond = |r: f32| {
+                [
+                    pixel - Vec2::X * r,
+                    pixel - Vec2::Y * r,
+                    pixel + Vec2::X * r,
+                    pixel + Vec2::Y * r,
+                ]
+                .map(|p| p.to_array())
+            };
+            batch.fill_quad(atlas, diamond(8.0), 0xFF18_1818);
+            batch.fill_quad(
+                atlas,
+                diamond(6.0),
+                if highlighted {
+                    0xFFFF_FFFF
+                } else {
+                    hud_colour(PATH_FULL)
+                },
+            );
+        }
+        let r = self.cinematix.frame().viewport;
+        batch.clip_since(start, r.x, r.y, r.x + r.w, r.y + r.h);
     }
 
     /// The pointer moved while the editor is up: an active drag follows it.
@@ -266,14 +344,19 @@ impl Game<'_> {
         if self.cinematix_export.is_some() {
             return true;
         }
-        if let Some(drag) = &self.cinematix_bend {
+        if let Some(drag) = &mut self.cinematix_bend {
             let dx = self.cursor.0 - drag.cursor.0;
             let dy = self.cursor.1 - drag.cursor.1;
             let midpoint = drag.midpoint + (drag.right * dx - drag.up * dy) * drag.units_per_pixel;
             let segment = drag.segment;
-            if dx != 0.0 || dy != 0.0 {
-                self.cinematix.bend_camera_segment(segment, midpoint);
+            if !drag.moved && dx.hypot(dy) < 2.0 {
+                return true;
             }
+            if !drag.moved {
+                self.cinematix.checkpoint();
+                drag.moved = true;
+            }
+            self.cinematix.bend_camera_segment(segment, midpoint);
             return true;
         }
         if let Some(last) = self.cinematix_look {
@@ -292,14 +375,14 @@ impl Game<'_> {
         true
     }
 
-    /// The wheel while the editor is up: it scrolls the channel list, and Ctrl zooms the time
-    /// axis around its middle.
-    pub(super) fn cinematix_wheel(&mut self, ticks: f32, ctrl: bool) -> bool {
+    /// Wheel scrolls channels, Ctrl zooms the time axis, and Shift pans it.
+    pub(super) fn cinematix_wheel(&mut self, ticks: f32) -> bool {
         if self.screen != Screen::Cinematix {
             return false;
         }
         if self.cinematix_export.is_none() {
-            self.cinematix.wheel(ticks, ctrl);
+            let mods = self.cinematix_mods();
+            self.cinematix.wheel(ticks, mods);
         }
         true
     }
@@ -396,7 +479,7 @@ impl Game<'_> {
     /// The film camera's path and the playback camera marker, drawn while the editor is open.
     /// Only the current segment and its immediate neighbours are drawn, as Flashback does: the
     /// whole film's path would be noise, and the current segment is what a keyframe edit changes.
-    pub(super) fn cinematix_camera_path(&self, g: &mut Gizmos) {
+    fn cinematix_camera_path(&self, g: &mut Gizmos) {
         if self.screen != Screen::Cinematix || self.cinematix_export.is_some() {
             return;
         }
@@ -406,6 +489,7 @@ impl Game<'_> {
             return;
         }
         let t = ed.time();
+        let active = ed.bend_segment();
         let last = times.iter().rposition(|&k| k <= t + 1e-9);
         let next = times.iter().position(|&k| k > t + 1e-9);
         let selected = ed.selected_camera_key_time();
@@ -429,7 +513,7 @@ impl Game<'_> {
             // From the detached view the whole path is readable; the segment under the playhead
             // stays bright and the rest fades.
             for i in 1..times.len() {
-                let current = times[i - 1] <= t + 1e-9 && t <= times[i] + 1e-9;
+                let current = active == Some((times[i - 1], times[i]));
                 camera_path_segment(
                     g,
                     ed,
@@ -437,11 +521,6 @@ impl Game<'_> {
                     times[i],
                     if current { PATH_FULL } else { PATH_FADE },
                 );
-            }
-            if let Some((a, b)) = ed.bend_segment()
-                && let Some((midpoint, _)) = ed.camera_at((a + b) * 0.5)
-            {
-                key_cross(g, midpoint, PATH_FULL);
             }
             for (i, &at) in times.iter().enumerate() {
                 let Some((position, rotation)) = ed.camera_at(at) else {
@@ -481,7 +560,7 @@ impl Game<'_> {
             // playhead is bright. Otherwise the line vanishes whenever that segment points
             // away from the camera.
             for i in 1..times.len() {
-                let current = times[i - 1] <= t + 1e-9 && t <= times[i] + 1e-9;
+                let current = active == Some((times[i - 1], times[i]));
                 camera_path_segment(
                     g,
                     ed,
@@ -878,13 +957,16 @@ impl Game<'_> {
                             .iter()
                             .map(|w| w.parse().ok())
                             .collect();
-                        let Some(v) = values.filter(|v| v.len() == 2 && v[1] > v[0]) else {
+                        let Some(v) = values.filter(|v| {
+                            v.len() == 2 && v[0].is_finite() && v[1].is_finite() && v[1] > v[0]
+                        }) else {
                             return Ok(Some(json!({
                                 "ok": false,
                                 "error": "meta range needs START END with END after START",
                             })));
                         };
                         meta.range = (v[0], v[1]);
+                        meta.open_ended = false;
                     }
                     Some("fps") => {
                         let Some(v) = words.get(2).and_then(|w| w.parse::<f32>().ok()) else {
@@ -925,7 +1007,7 @@ impl Game<'_> {
                     }
                 }
                 Ok(Some(json!({
-                    "ok": true, "range": meta.range, "fps": meta.fps,
+                    "ok": true, "range": meta.range, "open_ended": meta.open_ended, "fps": meta.fps,
                     "size": meta.resolution, "name": meta.name, "author": meta.author,
                 })))
             }
@@ -1150,6 +1232,26 @@ mod tests {
     }
 
     #[test]
+    fn overlay_clips_at_the_near_plane_and_rejects_points_behind_it() {
+        let projection = PathProjection {
+            eye: glam::DVec3::ZERO,
+            view: Mat4::IDENTITY,
+            center: Vec2::new(300.0, 200.0),
+            focal: 200.0,
+        };
+        assert_eq!(
+            projection.project(Vec3::new(0.0, 0.0, -1.0)),
+            Some(projection.center)
+        );
+        assert!(projection.project(Vec3::Z).is_none());
+        assert!(projection.line([0.0, 0.0, 1.0], [0.0, 0.0, 2.0]).is_none());
+        let (a, b) = projection.line([0.0, 0.0, -1.0], [0.01, 0.0, 0.0]).unwrap();
+        assert_eq!(a, projection.center);
+        assert!(b.x > a.x && b.y == a.y);
+        assert_eq!(hud_colour(PATH_FULL), 0xFF00_D7FF);
+    }
+
+    #[test]
     fn a_camera_frustum_draws_four_edges_and_a_far_rectangle_on_top() {
         let mut g = Gizmos::default();
         camera_frustum(&mut g, Vec3::ZERO, Quat::IDENTITY, 70.0, PATH_KEY);
@@ -1169,6 +1271,86 @@ mod tests {
         assert_eq!(g.on_top.len(), 3);
         assert!(g.on_top.iter().all(|l| l.color == PATH_SELECTED));
     }
+}
+
+const BEND_HIT_RADIUS: f32 = 12.0;
+const PATH_NEAR: f32 = 0.05;
+
+#[derive(Clone, Copy)]
+struct ProjectedBend {
+    segment: (f64, f64),
+    midpoint: Vec3,
+    pixel: Vec2,
+    units_per_pixel: f32,
+}
+
+fn closest_bend(
+    handles: impl Iterator<Item = ProjectedBend>,
+    cursor: Vec2,
+) -> Option<ProjectedBend> {
+    handles
+        .map(|handle| (handle.pixel.distance_squared(cursor), handle))
+        .filter(|(distance, _)| *distance <= BEND_HIT_RADIUS * BEND_HIT_RADIUS)
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, handle)| handle)
+}
+
+/// The world renders to the whole window; the editor clips its overlay to the stage.
+#[derive(Clone, Copy)]
+struct PathProjection {
+    eye: glam::DVec3,
+    view: Mat4,
+    center: Vec2,
+    focal: f32,
+}
+
+impl PathProjection {
+    fn new(ed: &cinematix_editor::Editor) -> Option<Self> {
+        let (eye, yaw, pitch) = ed.preview_view()?;
+        let (w, h) = ed.frame().size;
+        let focal = h * 0.5 / (ed.preview_fov().clamp(1.0, 179.0).to_radians() * 0.5).tan();
+        (focal.is_finite() && focal > 0.0).then_some(Self {
+            eye: glam::DVec3::from_array(eye),
+            view: horizon_client::camera::view_matrix(yaw, pitch),
+            center: Vec2::new(w, h) * 0.5,
+            focal,
+        })
+    }
+
+    fn local(&self, point: [f64; 3]) -> Vec3 {
+        self.view
+            .transform_vector3((glam::DVec3::from_array(point) - self.eye).as_vec3())
+    }
+
+    fn project(&self, p: Vec3) -> Option<Vec2> {
+        if !p.is_finite() || p.z > -PATH_NEAR {
+            return None;
+        }
+        let pixel = self.center + Vec2::new(p.x, -p.y) * (self.focal / -p.z);
+        pixel.is_finite().then_some(pixel)
+    }
+
+    fn line(&self, a: [f64; 3], b: [f64; 3]) -> Option<(Vec2, Vec2)> {
+        let (mut a, mut b) = (self.local(a), self.local(b));
+        if !a.is_finite() || !b.is_finite() {
+            return None;
+        }
+        if a.z > -PATH_NEAR {
+            std::mem::swap(&mut a, &mut b);
+        }
+        if a.z > -PATH_NEAR {
+            return None;
+        }
+        if b.z > -PATH_NEAR {
+            b = a.lerp(b, (-PATH_NEAR - a.z) / (b.z - a.z));
+            b.z = -PATH_NEAR;
+        }
+        Some((self.project(a)?, self.project(b)?))
+    }
+}
+
+fn hud_colour(argb: u32) -> u32 {
+    (argb & 0xFF00_FF00) | ((argb & 0x00FF_0000) >> 16) | ((argb & 0xFF) << 16)
 }
 
 const PATH_FULL: u32 = 0xFFFF_D700;

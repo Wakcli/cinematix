@@ -157,6 +157,7 @@ impl Document {
                 author: String::new(),
                 fps: 24.0,
                 range: (0.0, 10.0),
+                open_ended: true,
                 resolution: (1920, 1080),
                 environment: Default::default(),
                 clips: Vec::new(),
@@ -178,6 +179,47 @@ impl Document {
 
     /// One channel per animatable property, in node-id then property order, keeping the keys of
     /// channels that already exist.
+    /// The finite playback/export range, even when the editing timeline has no end cap.
+    pub fn playback_range(&self) -> (f64, f64) {
+        let meta = &self.scene.meta;
+        let (start, end) = meta.range;
+        if !meta.open_ended {
+            return (start, end);
+        }
+        let frame = 1.0 / f64::from(meta.fps.round().max(1.0));
+        let last_event = self
+            .channels
+            .iter()
+            .filter_map(|ch| ch.keys.last().map(|k| k.t))
+            .chain(self.scene.world.ops().iter().filter_map(|op| op.at))
+            .filter(|t| t.is_finite() && *t >= start)
+            .reduce(f64::max);
+        let last_clip = meta
+            .clips
+            .iter()
+            .map(|clip| clip.end)
+            .filter(|t| t.is_finite() && *t > start)
+            .reduce(f64::max);
+        let content_end = last_event
+            .map(|t| t + frame)
+            .into_iter()
+            .chain(last_clip)
+            .reduce(f64::max);
+        (start, content_end.unwrap_or(end).max(start + frame))
+    }
+
+    pub(crate) fn clip_edit_range(&self, window_end: f64) -> (f64, f64) {
+        let (start, end) = self.playback_range();
+        (
+            start,
+            if self.scene.meta.open_ended {
+                end.max(window_end)
+            } else {
+                end
+            },
+        )
+    }
+
     pub fn sync_channels(&mut self) {
         let mut ids: Vec<NodeId> = self.scene.nodes.keys().copied().collect();
         ids.sort();

@@ -108,6 +108,7 @@ impl Button {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Field {
+    FilmLength,
     Fov,
     Near,
     Far,
@@ -137,6 +138,7 @@ pub fn fields_for(section: Section) -> &'static [Field] {
             Field::ShakeFrequency,
         ],
         Section::Render => &[],
+        Section::Film => &[Field::FilmLength],
         Section::World => &[
             Field::Time,
             Field::Rain,
@@ -151,6 +153,7 @@ pub fn fields_for(section: Section) -> &'static [Field] {
 impl Field {
     pub fn range(self) -> (f64, f64, f64) {
         match self {
+            Field::FilmLength => (0.0, 86_400.0, 1.0),
             Field::Fov => (10.0, 170.0, 1.0),
             Field::Near => (0.01, 1.0, 0.01),
             Field::Far => (16.0, 2048.0, 16.0),
@@ -171,6 +174,7 @@ impl Field {
 
     pub fn label(self) -> &'static str {
         match self {
+            Field::FilmLength => "cinematix.field.film_length",
             Field::Fov => "cinematix.field.fov",
             Field::Near => "cinematix.field.near",
             Field::Far => "cinematix.field.far",
@@ -191,6 +195,13 @@ impl Field {
 
     pub fn get(self, doc: &Document) -> f64 {
         match self {
+            Field::FilmLength => {
+                if doc.scene.meta.open_ended {
+                    0.0
+                } else {
+                    doc.scene.meta.range.1 - doc.scene.meta.range.0
+                }
+            }
             Field::Fps => doc.scene.meta.fps as f64,
             Field::Width => f64::from(doc.scene.meta.resolution.0),
             Field::Height => f64::from(doc.scene.meta.resolution.1),
@@ -211,7 +222,8 @@ impl Field {
                     Field::Fps => doc.scene.meta.fps as f64,
                     Field::Width => f64::from(doc.scene.meta.resolution.0),
                     Field::Height => f64::from(doc.scene.meta.resolution.1),
-                    Field::Time
+                    Field::FilmLength
+                    | Field::Time
                     | Field::Rain
                     | Field::Thunder
                     | Field::FogStart
@@ -228,6 +240,12 @@ impl Field {
         let (min, max, _) = self.range();
         let v = v.clamp(min, max);
         match self {
+            Field::FilmLength => {
+                doc.scene.meta.open_ended = v == 0.0;
+                if v > 0.0 {
+                    doc.scene.meta.range.1 = doc.scene.meta.range.0 + v;
+                }
+            }
             Field::Fps => doc.scene.meta.fps = v as f32,
             Field::Width => doc.scene.meta.resolution.0 = v as u32,
             Field::Height => doc.scene.meta.resolution.1 = v as u32,
@@ -249,6 +267,7 @@ impl Field {
                         Field::Fps
                         | Field::Width
                         | Field::Height
+                        | Field::FilmLength
                         | Field::Time
                         | Field::Rain
                         | Field::Thunder
@@ -269,6 +288,7 @@ impl Field {
             Field::Fps => " fps",
             Field::Width | Field::Height => " px",
             Field::Time => " t",
+            Field::FilmLength => " s",
             Field::ShakeFrequency => " Hz",
             Field::Aperture | Field::Rain | Field::Thunder => "",
         }
@@ -369,6 +389,7 @@ enum Drag {
     ClipEdge {
         clip: usize,
         edge: u8,
+        range: (f64, f64),
     },
 }
 
@@ -601,7 +622,7 @@ impl Editor {
     }
 
     pub fn range(&self) -> (f64, f64) {
-        self.doc.scene.meta.range
+        self.doc.playback_range()
     }
 
     fn max_scroll(&self) -> usize {
@@ -625,13 +646,35 @@ impl Editor {
 
     pub fn fit(&mut self) {
         let (r0, r1) = self.range();
-        let (t0, t1) = window_for(r0, r1);
+        let (t0, t1) = window_for(
+            r0,
+            r1.max(if self.doc.scene.meta.open_ended {
+                self.time()
+            } else {
+                r1
+            }),
+        );
         self.set_window(t0, t1);
     }
 
     pub fn seek(&mut self, t: f64) {
-        let (r0, r1) = self.range();
-        self.playhead.t = t.clamp(r0.min(r1), r0.max(r1));
+        self.seek_in_place(t);
+        if self.doc.scene.meta.open_ended && !(self.t0..=self.t1).contains(&self.time()) {
+            let half = (self.t1 - self.t0) * 0.5;
+            self.set_window((self.time() - half).max(self.range().0), self.time() + half);
+        }
+    }
+
+    fn seek_in_place(&mut self, t: f64) {
+        if !t.is_finite() {
+            return;
+        }
+        let (start, end) = self.doc.scene.meta.range;
+        self.playhead.t = if self.doc.scene.meta.open_ended {
+            t.max(start)
+        } else {
+            t.clamp(start.min(end), start.max(end))
+        };
     }
 
     pub fn seek_frame(&mut self, frame: i64) {
@@ -646,7 +689,7 @@ impl Editor {
         } else {
             t
         };
-        self.seek(t);
+        self.seek_in_place(t);
     }
 
     pub fn step(&mut self, frames: i64) {
@@ -690,8 +733,20 @@ impl Editor {
         let key = if self.preview_free && target.node == self.doc.scene.camera {
             match target.prop {
                 Prop::Translation => {
-                    self.doc
-                        .upsert_key(ci, t, Value::Vec3(self.free_pos.to_array()))
+                    let key = self
+                        .doc
+                        .upsert_key(ci, t, Value::Vec3(self.free_pos.to_array()));
+                    // A position capture in Free View records the framing as well.
+                    if key.is_some()
+                        && let Some(rotation) = self
+                            .doc
+                            .channel_index(self.doc.scene.camera, Prop::Rotation)
+                    {
+                        let view = rotation_from_view(self.free_yaw, self.free_pitch);
+                        self.doc
+                            .upsert_key(rotation, t, Value::Quat(view.to_array()));
+                    }
+                    key
                 }
                 Prop::Rotation => self.doc.upsert_key(
                     ci,
@@ -807,12 +862,17 @@ impl Editor {
         }
     }
 
-    pub fn wheel(&mut self, ticks: f32, ctrl: bool) -> bool {
+    pub fn wheel(&mut self, ticks: f32, mods: Mods) -> bool {
         if ticks == 0.0 {
             return false;
         }
-        if ctrl {
+        if mods.ctrl {
             self.zoom(if ticks > 0.0 { 1.25 } else { 0.8 });
+        } else if mods.shift {
+            let span = self.t1 - self.t0;
+            let start = (self.t0 - f64::from(ticks) * span * 0.25)
+                .max(self.doc.scene.meta.range.0 - span * 0.02);
+            self.set_window(start, start + span);
         } else {
             let step = if ticks > 0.0 { 3 } else { -3 };
             let next = (self.scroll as i64 + i64::from(step)).clamp(0, self.max_scroll() as i64);
@@ -962,6 +1022,7 @@ impl Editor {
                     self.drag = Some(Drag::ClipEdge {
                         clip: i,
                         edge: *edge,
+                        range: self.range(),
                     });
                     return true;
                 }
@@ -1053,7 +1114,9 @@ impl Editor {
                 let frac = f64::from((pos.0 - r.x - 4.0) / track);
                 let scrub = cinematix_ui::Scrubber::new(field.get(&self.doc), min, max, step);
                 self.checkpoint();
-                field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
+                if *field != Field::FilmLength {
+                    field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
+                }
                 self.drag = Some(Drag::Number {
                     field: *field,
                     start: field.get(&self.doc),
@@ -1137,7 +1200,7 @@ impl Editor {
     }
 
     fn add_clip(&mut self) {
-        let (r0, r1) = self.range();
+        let (r0, r1) = self.doc.clip_edit_range(self.t1);
         let start = self.t0.max(r0).min(r1);
         let end = self.t1.max(start + f64::from(1.0 / self.fps())).min(r1);
         self.checkpoint();
@@ -1257,6 +1320,9 @@ impl Editor {
                 let (min, max, step) = field.range();
                 let scrub = cinematix_ui::Scrubber::new(start, min, max, step);
                 field.set(&mut self.doc, scrub.drag(pos.0 - start_x, mods));
+                if field == Field::FilmLength {
+                    self.seek_in_place(self.time());
+                }
                 true
             }
             Drag::TimelineSplit { start, y } => {
@@ -1269,21 +1335,24 @@ impl Editor {
                 self.inspector_frac = (start + (x - pos.0) / width).clamp(0.12, 0.4);
                 true
             }
-            Drag::ClipEdge { clip, edge } => {
+            Drag::ClipEdge {
+                clip,
+                edge,
+                range: (r0, r1),
+            } => {
                 let Some(track) = f.clip_track else {
                     return false;
                 };
-                let (r0, r1) = self.range();
                 let frac = ((pos.0 - track.x) / track.w.max(1.0)).clamp(0.0, 1.0);
                 let t = r0 + f64::from(frac) * (r1 - r0);
                 let min = f64::from(1.0 / self.fps());
                 match self.doc.scene.meta.clips.get_mut(clip) {
                     Some(c) if edge == 0 => {
-                        c.start = t.clamp(r0, c.end - min);
+                        c.start = t.clamp(r0, (c.end - min).max(r0));
                         true
                     }
                     Some(c) => {
-                        c.end = t.clamp(c.start + min, r1);
+                        c.end = t.clamp((c.start + min).min(r1), r1);
                         true
                     }
                     None => false,
@@ -1450,6 +1519,9 @@ impl Editor {
     pub fn release(&mut self, pos: (f32, f32)) -> bool {
         let panel = matches!(self.drag, Some(Drag::Panel { .. }));
         let clip = matches!(self.drag, Some(Drag::ClipEdge { .. }));
+        if self.dragging_field(Field::FilmLength) {
+            self.fit();
+        }
         if panel && self.inspector_float.is_some() && pos.0 >= self.size.0 - 48.0 {
             self.inspector_float = None;
         }
@@ -1697,6 +1769,89 @@ impl Editor {
         (a < b).then_some((a, b))
     }
 
+    /// Midpoints of all editable camera path segments, independent of the playhead.
+    pub fn camera_bend_handles(&self) -> impl Iterator<Item = ((f64, f64), Vec3)> + '_ {
+        self.doc
+            .channel_index(self.doc.scene.camera, Prop::Translation)
+            .map(|ci| &self.doc.channels[ci])
+            .filter(|channel| !channel.muted)
+            .into_iter()
+            .flat_map(|channel| channel.keys.windows(2))
+            .filter_map(|keys| {
+                let (a, b) = (keys[0].t, keys[1].t);
+                if b - a < 1e-9 || !a.is_finite() || !b.is_finite() {
+                    return None;
+                }
+                let midpoint = self.camera_at(a + (b - a) * 0.5)?.0;
+                Some(((a, b), midpoint))
+            })
+    }
+
+    /// Frame the active segment with the detached camera only. Sample the evaluated
+    /// curve so even a segment that already has a large bend fits in the view.
+    pub fn frame_bend_segment(&mut self) -> bool {
+        let Some((a, b)) = self.bend_segment() else {
+            return false;
+        };
+        let Some((start, _)) = self.camera_at(a) else {
+            return false;
+        };
+        let Some((end, _)) = self.camera_at(b) else {
+            return false;
+        };
+        let Some((center, _)) = self.camera_at(a + (b - a) * 0.5) else {
+            return false;
+        };
+        let radius = (0..=16)
+            .filter_map(|i| self.camera_at(a + (b - a) * f64::from(i) / 16.0))
+            .map(|(p, _)| p.distance(center))
+            .fold(0.0_f32, f32::max)
+            .max(1.0);
+        let side = (end - start)
+            .cross(Vec3::Y)
+            .try_normalize()
+            .unwrap_or(Vec3::X);
+        let frame = self.frame();
+        let mut stage = frame.viewport;
+        if frame.inspector_floating {
+            // Frame into the largest unobstructed part of the stage.
+            let r = frame.inspector;
+            let right = stage.x + stage.w;
+            let bottom = stage.y + stage.h;
+            stage = [
+                Rect::new(stage.x, stage.y, (r.x - stage.x).max(0.0), stage.h),
+                Rect::new(r.x + r.w, stage.y, (right - r.x - r.w).max(0.0), stage.h),
+                Rect::new(stage.x, stage.y, stage.w, (r.y - stage.y).max(0.0)),
+                Rect::new(stage.x, r.y + r.h, stage.w, (bottom - r.y - r.h).max(0.0)),
+            ]
+            .into_iter()
+            .max_by(|a, b| a.w.min(a.h).total_cmp(&b.w.min(b.h)))
+            .unwrap();
+        }
+        let margin = stage.w.min(stage.h) * 0.5;
+        if margin <= 0.0 {
+            return false;
+        }
+        let half_fov = self.preview_fov().clamp(1.0, 179.0).to_radians() * 0.5;
+        let focal = frame.size.1 * 0.5 / half_fov.tan();
+        let desired_x = stage.x + stage.w * 0.5 - frame.size.0 * 0.5;
+        let desired_y = stage.y + stage.h * 0.5 - frame.size.1 * 0.5;
+        let distant = (side + Vec3::Y * 0.25).normalize();
+        let (yaw, pitch) = look_at(center + distant, center);
+        let rotation = rotation_from_view(yaw, pitch);
+        let shift = Vec3::new(-desired_x / focal, desired_y / focal, 0.0);
+        let distance = radius * (1.0 + 1.25 * (focal + desired_x.hypot(desired_y)) / margin);
+        let eye = center + rotation * ((Vec3::Z + shift) * distance);
+        if !eye.is_finite() {
+            return false;
+        }
+        self.preview_free = true;
+        self.free_pos = eye;
+        (self.free_yaw, self.free_pitch) = (yaw, pitch);
+        self.playing = false;
+        true
+    }
+
     pub fn bend_camera_segment(&mut self, segment: (f64, f64), midpoint: Vec3) {
         let Some(ci) = self
             .doc
@@ -1885,9 +2040,8 @@ impl Editor {
     pub fn adopt_document(&mut self, doc: Document) {
         self.checkpoint();
         self.doc = doc;
-        let (r0, r1) = self.doc.scene.meta.range;
         self.playhead.fps = self.doc.scene.meta.fps.round().max(1.0);
-        self.seek(self.playhead.t.clamp(r0.min(r1), r0.max(r1)));
+        self.seek_in_place(self.playhead.t);
         self.fit();
         self.selected_channel = None;
         self.selected_key = None;
@@ -2070,6 +2224,65 @@ mod tests {
     }
 
     #[test]
+    fn unlimited_timeline_can_pan_and_key_past_ten_seconds() {
+        let mut e = editor();
+        assert!(e.doc.scene.meta.open_ended);
+        for _ in 0..8 {
+            assert!(e.wheel(
+                -1.0,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                }
+            ));
+        }
+        let f = e.frame();
+        assert!(e.press(
+            (f.ruler.x + f.ruler.w * 0.5, f.ruler.y + 4.0),
+            Mods::default()
+        ));
+        e.release((0.0, 0.0));
+        let t = e.time();
+        assert!(t > 20.0);
+        assert!(e.add_key());
+        assert_eq!(e.range(), (0.0, t + 1.0 / 24.0));
+        e.looping = false;
+        e.playing = true;
+        e.advance(100.0);
+        assert_eq!(e.time(), e.range().1);
+        assert!(!e.playing);
+    }
+
+    #[test]
+    fn film_inspector_length_can_set_and_clear_a_fixed_end() {
+        let mut e = editor();
+        e.section = Section::Film;
+        let (_, r) = e
+            .frame()
+            .fields
+            .into_iter()
+            .find(|(f, _)| *f == Field::FilmLength)
+            .unwrap();
+        let pos = (r.x + 8.0, r.y + 4.0);
+        assert!(e.press(pos, Mods::default()));
+        assert!(e.drag_to(
+            (pos.0 + 18.0, pos.1),
+            Mods {
+                shift: true,
+                ..Mods::default()
+            }
+        ));
+        e.release(pos);
+        assert_eq!(e.range(), (0.0, 30.0));
+        e.seek(45.0);
+        assert_eq!(e.time(), 30.0);
+        assert!(e.undo());
+        e.seek(45.0);
+        assert_eq!(e.time(), 45.0);
+        assert!(e.window().1 >= 45.0);
+    }
+
+    #[test]
     fn playing_advances_and_loops_inside_the_range() {
         let mut e = editor();
         e.playing = true;
@@ -2093,15 +2306,29 @@ mod tests {
     }
 
     #[test]
-    fn first_camera_key_captures_detached_position() {
+    fn detached_position_keys_capture_the_view_direction_and_undo_together() {
         let mut e = editor();
         e.toggle_free_view();
         let position = Vec3::new(2.0, 5.0, 8.0);
         e.free_nudge(position);
+        e.free_look(35.0, 20.0);
+        let first_view = e.preview_rotation().unwrap();
         assert_eq!(e.doc.key_count(), 0);
         assert!(e.add_key());
-        assert_eq!(e.doc.key_count(), 1);
+        assert_eq!(e.doc.key_count(), 2);
         assert_eq!(e.camera_at(0.0).unwrap().0, position);
+        assert!(e.camera_at(0.0).unwrap().1.dot(first_view).abs() > 0.99999);
+
+        e.seek_frame(24);
+        e.free_look(-75.0, -30.0);
+        let second_view = e.preview_rotation().unwrap();
+        assert!(e.add_key());
+        e.toggle_free_view();
+        assert_eq!(e.doc.key_count(), 4);
+        assert!(e.preview_rotation().unwrap().dot(second_view).abs() > 0.99999);
+        assert!(e.camera_at(0.5).unwrap().1.dot(first_view).abs() < 0.99);
+        e.undo();
+        assert_eq!(e.doc.key_count(), 2);
     }
 
     #[test]
@@ -2872,6 +3099,59 @@ mod tests {
         let back = e.preview_view().unwrap();
         assert!((back.0[0] - film.0[0]).abs() < 1e-6);
         assert!((back.1 - film.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn bend_handles_stay_on_each_segment_when_the_playhead_moves() {
+        let mut e = editor();
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        for (t, x) in [(0.0, 0.0), (2.0, 10.0), (4.0, 20.0)] {
+            e.doc.upsert_key(ci, t, Value::Vec3([x, 0.0, 0.0]));
+        }
+        let before: Vec<_> = e.camera_bend_handles().collect();
+        assert_eq!(
+            before.iter().map(|h| h.0).collect::<Vec<_>>(),
+            [(0.0, 2.0), (2.0, 4.0)]
+        );
+        e.seek(3.0);
+        assert_eq!(e.camera_bend_handles().collect::<Vec<_>>(), before);
+        let moved = Vec3::new(5.0, 4.0, 0.0);
+        e.bend_camera_segment(before[0].0, moved);
+        assert_eq!(
+            e.camera_bend_handles().collect::<Vec<_>>(),
+            [(before[0].0, moved), before[1]]
+        );
+        assert_eq!(e.doc.key_count(), 3);
+    }
+
+    #[test]
+    fn framing_a_bend_aims_free_view_without_changing_the_film() {
+        let mut e = editor();
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        e.doc.upsert_key(ci, 0.0, Value::Vec3([100.0, 10.0, 0.0]));
+        e.doc.upsert_key(ci, 2.0, Value::Vec3([120.0, 10.0, 0.0]));
+        e.seek(1.0);
+        e.bend_camera_segment((0.0, 2.0), Vec3::new(110.0, 10.0, 6.0));
+        let midpoint = e.camera_at(1.0).unwrap().0;
+        assert!(e.frame_bend_segment());
+        let (eye, yaw, pitch) = e.preview_view().unwrap();
+        let frame = e.frame();
+        let local = rotation_from_view(yaw, pitch).conjugate()
+            * (midpoint - Vec3::from_array(eye.map(|v| v as f32)));
+        let focal = frame.size.1 * 0.5 / (e.preview_fov().to_radians() * 0.5).tan();
+        let x = frame.size.0 * 0.5 + local.x * focal / -local.z;
+        let y = frame.size.1 * 0.5 - local.y * focal / -local.z;
+        assert!(local.z < 0.0 && frame.viewport.contains(x, y));
+        assert!(e.can_pick_bend((x, y)));
+        assert_eq!(e.doc.key_count(), 2);
+        assert_eq!(e.camera_at(1.0).unwrap().0, midpoint);
+        assert_eq!(e.time(), 1.0);
     }
 
     #[test]
