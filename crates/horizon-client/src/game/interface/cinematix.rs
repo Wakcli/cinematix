@@ -229,21 +229,28 @@ impl Game<'_> {
         true
     }
 
-    fn bend_handle(&self, projection: &PathProjection) -> Option<((f64, f64), Vec3, Vec2, f32)> {
+    fn bend_handles(&self, projection: PathProjection) -> impl Iterator<Item = ProjectedBend> + '_ {
         let ed = &self.cinematix;
-        if !ed.preview_free {
-            return None;
-        }
-        let segment = ed.bend_segment()?;
-        let midpoint = ed.camera_at(segment.0 + (segment.1 - segment.0) * 0.5)?.0;
-        let local = projection.local(midpoint.to_array().map(f64::from));
-        let pixel = projection.project(local)?;
         let frame = ed.frame();
-        if !frame.viewport.contains(pixel.x, pixel.y) || frame.inspector.contains(pixel.x, pixel.y)
-        {
-            return None;
-        }
-        Some((segment, midpoint, pixel, -local.z / projection.focal))
+        ed.camera_bend_handles()
+            .filter_map(move |(segment, midpoint)| {
+                if !ed.preview_free {
+                    return None;
+                }
+                let local = projection.local(midpoint.to_array().map(f64::from));
+                let pixel = projection.project(local)?;
+                if !frame.viewport.contains(pixel.x, pixel.y)
+                    || frame.inspector.contains(pixel.x, pixel.y)
+                {
+                    return None;
+                }
+                Some(ProjectedBend {
+                    segment,
+                    midpoint,
+                    pixel,
+                    units_per_pixel: -local.z / projection.focal,
+                })
+            })
     }
 
     fn pick_cinematix_bend(&self) -> Option<BendDrag> {
@@ -252,18 +259,15 @@ impl Game<'_> {
             return None;
         }
         let projection = PathProjection::new(ed)?;
-        let (segment, midpoint, pixel, units_per_pixel) = self.bend_handle(&projection)?;
-        if pixel.distance(Vec2::from(self.cursor)) > BEND_HIT_RADIUS {
-            return None;
-        }
+        let handle = closest_bend(self.bend_handles(projection), Vec2::from(self.cursor))?;
         let inverse = projection.view.transpose();
         Some(BendDrag {
-            segment,
+            segment: handle.segment,
             cursor: self.cursor,
-            midpoint,
+            midpoint: handle.midpoint,
             right: inverse.transform_vector3(Vec3::X),
             up: inverse.transform_vector3(Vec3::Y),
-            units_per_pixel,
+            units_per_pixel: handle.units_per_pixel,
             moved: false,
         })
     }
@@ -292,10 +296,22 @@ impl Game<'_> {
                 hud_colour(line.color),
             );
         }
-        if let Some((_, _, pixel, _)) = self.bend_handle(&projection) {
-            let hovered = self.cinematix_bend.is_some()
-                || (self.cinematix.can_pick_bend(self.cursor)
-                    && pixel.distance(Vec2::from(self.cursor)) <= BEND_HIT_RADIUS);
+        let handles = self.bend_handles(projection).collect::<Vec<_>>();
+        let hovered = if let Some(drag) = &self.cinematix_bend {
+            Some(drag.segment)
+        } else if self.cinematix.can_pick_bend(self.cursor) {
+            closest_bend(handles.iter().copied(), Vec2::from(self.cursor)).map(|h| h.segment)
+        } else {
+            None
+        };
+        // Draw the hovered or dragged handle last when markers overlap.
+        for handle in handles
+            .iter()
+            .filter(|h| Some(h.segment) != hovered)
+            .chain(handles.iter().filter(|h| Some(h.segment) == hovered))
+        {
+            let pixel = handle.pixel;
+            let highlighted = Some(handle.segment) == hovered;
             let diamond = |r: f32| {
                 [
                     pixel - Vec2::X * r,
@@ -309,7 +325,7 @@ impl Game<'_> {
             batch.fill_quad(
                 atlas,
                 diamond(6.0),
-                if hovered {
+                if highlighted {
                     0xFFFF_FFFF
                 } else {
                     hud_colour(PATH_FULL)
@@ -1257,7 +1273,27 @@ mod tests {
 const BEND_HIT_RADIUS: f32 = 12.0;
 const PATH_NEAR: f32 = 0.05;
 
+#[derive(Clone, Copy)]
+struct ProjectedBend {
+    segment: (f64, f64),
+    midpoint: Vec3,
+    pixel: Vec2,
+    units_per_pixel: f32,
+}
+
+fn closest_bend(
+    handles: impl Iterator<Item = ProjectedBend>,
+    cursor: Vec2,
+) -> Option<ProjectedBend> {
+    handles
+        .map(|handle| (handle.pixel.distance_squared(cursor), handle))
+        .filter(|(distance, _)| *distance <= BEND_HIT_RADIUS * BEND_HIT_RADIUS)
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, handle)| handle)
+}
+
 /// The world renders to the whole window; the editor clips its overlay to the stage.
+#[derive(Clone, Copy)]
 struct PathProjection {
     eye: glam::DVec3,
     view: Mat4,

@@ -1709,6 +1709,24 @@ impl Editor {
         (a < b).then_some((a, b))
     }
 
+    /// Midpoints of all editable camera path segments, independent of the playhead.
+    pub fn camera_bend_handles(&self) -> impl Iterator<Item = ((f64, f64), Vec3)> + '_ {
+        self.doc
+            .channel_index(self.doc.scene.camera, Prop::Translation)
+            .map(|ci| &self.doc.channels[ci])
+            .filter(|channel| !channel.muted)
+            .into_iter()
+            .flat_map(|channel| channel.keys.windows(2))
+            .filter_map(|keys| {
+                let (a, b) = (keys[0].t, keys[1].t);
+                if b - a < 1e-9 || !a.is_finite() || !b.is_finite() {
+                    return None;
+                }
+                let midpoint = self.camera_at(a + (b - a) * 0.5)?.0;
+                Some(((a, b), midpoint))
+            })
+    }
+
     /// Frame the active segment with the detached camera only. Sample the evaluated
     /// curve so even a segment that already has a large bend fits in the view.
     pub fn frame_bend_segment(&mut self) -> bool {
@@ -2963,6 +2981,32 @@ mod tests {
         let back = e.preview_view().unwrap();
         assert!((back.0[0] - film.0[0]).abs() < 1e-6);
         assert!((back.1 - film.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn bend_handles_stay_on_each_segment_when_the_playhead_moves() {
+        let mut e = editor();
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        for (t, x) in [(0.0, 0.0), (2.0, 10.0), (4.0, 20.0)] {
+            e.doc.upsert_key(ci, t, Value::Vec3([x, 0.0, 0.0]));
+        }
+        let before: Vec<_> = e.camera_bend_handles().collect();
+        assert_eq!(
+            before.iter().map(|h| h.0).collect::<Vec<_>>(),
+            [(0.0, 2.0), (2.0, 4.0)]
+        );
+        e.seek(3.0);
+        assert_eq!(e.camera_bend_handles().collect::<Vec<_>>(), before);
+        let moved = Vec3::new(5.0, 4.0, 0.0);
+        e.bend_camera_segment(before[0].0, moved);
+        assert_eq!(
+            e.camera_bend_handles().collect::<Vec<_>>(),
+            [(before[0].0, moved), before[1]]
+        );
+        assert_eq!(e.doc.key_count(), 3);
     }
 
     #[test]
