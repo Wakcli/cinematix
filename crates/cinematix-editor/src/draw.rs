@@ -582,14 +582,20 @@ fn draw_field(
         ((v - min) / (max - min)) as f32
     };
     let label = Text::translate(field.label(), &[]);
-    let value = format!("{}{}", field.text(&ed.doc), field.unit());
+    let value = if field == Field::FilmLength && ed.doc.scene.meta.open_ended {
+        Text::translate("cinematix.film.unlimited", &[]).plain()
+    } else {
+        format!("{}{}", field.text(&ed.doc), field.unit())
+    };
     let hover = r.contains(cursor.0, cursor.1);
     let held = ed.dragging_field(field);
     if field == Field::Time {
         draw_time_field(batch, atlas, r, &label, &value, frac, hover, held);
     } else {
         box_frame(batch, atlas, r);
-        bar(batch, atlas, r, frac, false);
+        if field != Field::FilmLength {
+            bar(batch, atlas, r, frac, false);
+        }
         left_label(
             batch,
             atlas,

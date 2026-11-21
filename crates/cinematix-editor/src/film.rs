@@ -213,6 +213,15 @@ mod tests {
     }
 
     #[test]
+    fn legacy_metadata_without_a_length_mode_keeps_its_fixed_range() {
+        let mut json = serde_json::to_value(Document::new().scene.meta).unwrap();
+        json.as_object_mut().unwrap().remove("open_ended");
+        let meta: cinematix_scene::SceneMeta = serde_json::from_value(json).unwrap();
+        assert!(!meta.open_ended);
+        assert_eq!(meta.range, (0.0, 10.0));
+    }
+
+    #[test]
     fn a_film_round_trips_through_the_zip() {
         let path = temp_path();
         let doc = animated();
@@ -220,6 +229,7 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.channels.len(), doc.channels.len());
         assert_eq!(loaded.key_count(), 4);
+        assert!(loaded.scene.meta.open_ended);
         let mut a = Editor::new();
         a.doc = doc;
         let mut b = Editor::new();

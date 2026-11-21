@@ -375,14 +375,14 @@ impl Game<'_> {
         true
     }
 
-    /// The wheel while the editor is up: it scrolls the channel list, and Ctrl zooms the time
-    /// axis around its middle.
-    pub(super) fn cinematix_wheel(&mut self, ticks: f32, ctrl: bool) -> bool {
+    /// Wheel scrolls channels, Ctrl zooms the time axis, and Shift pans it.
+    pub(super) fn cinematix_wheel(&mut self, ticks: f32) -> bool {
         if self.screen != Screen::Cinematix {
             return false;
         }
         if self.cinematix_export.is_none() {
-            self.cinematix.wheel(ticks, ctrl);
+            let mods = self.cinematix_mods();
+            self.cinematix.wheel(ticks, mods);
         }
         true
     }
@@ -957,13 +957,16 @@ impl Game<'_> {
                             .iter()
                             .map(|w| w.parse().ok())
                             .collect();
-                        let Some(v) = values.filter(|v| v.len() == 2 && v[1] > v[0]) else {
+                        let Some(v) = values.filter(|v| {
+                            v.len() == 2 && v[0].is_finite() && v[1].is_finite() && v[1] > v[0]
+                        }) else {
                             return Ok(Some(json!({
                                 "ok": false,
                                 "error": "meta range needs START END with END after START",
                             })));
                         };
                         meta.range = (v[0], v[1]);
+                        meta.open_ended = false;
                     }
                     Some("fps") => {
                         let Some(v) = words.get(2).and_then(|w| w.parse::<f32>().ok()) else {
@@ -1004,7 +1007,7 @@ impl Game<'_> {
                     }
                 }
                 Ok(Some(json!({
-                    "ok": true, "range": meta.range, "fps": meta.fps,
+                    "ok": true, "range": meta.range, "open_ended": meta.open_ended, "fps": meta.fps,
                     "size": meta.resolution, "name": meta.name, "author": meta.author,
                 })))
             }

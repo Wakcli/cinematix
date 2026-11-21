@@ -134,7 +134,11 @@ Three stacked views over one time axis and one selection set:
 
 Shared behaviour:
 
-- One playhead, one range, one selection (`NodeId` + channel index).
+- New films have no editing end. Shift+scroll pans the timeline, including beyond 10 seconds.
+- In **Film → Properties**, drag **Length** right to set a fixed duration (Shift for larger steps),
+  or drag left to zero to return to **Unlimited**. Existing films keep their saved range until changed.
+- Unlimited films play and export through the last key, timed world change, or clip; empty films
+  use the starting preview range.
 - Zoom by `Z`/`X` or ctrl+scroll; vertical zoom only in the curve editor.
 - Snap to frames, keys, markers and range ends; hold `Alt` to suspend.
 - Every edit is a command on an undo stack, coalesced per drag.

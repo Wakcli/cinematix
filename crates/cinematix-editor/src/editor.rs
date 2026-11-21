@@ -108,6 +108,7 @@ impl Button {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Field {
+    FilmLength,
     Fov,
     Near,
     Far,
@@ -137,6 +138,7 @@ pub fn fields_for(section: Section) -> &'static [Field] {
             Field::ShakeFrequency,
         ],
         Section::Render => &[],
+        Section::Film => &[Field::FilmLength],
         Section::World => &[
             Field::Time,
             Field::Rain,
@@ -151,6 +153,7 @@ pub fn fields_for(section: Section) -> &'static [Field] {
 impl Field {
     pub fn range(self) -> (f64, f64, f64) {
         match self {
+            Field::FilmLength => (0.0, 86_400.0, 1.0),
             Field::Fov => (10.0, 170.0, 1.0),
             Field::Near => (0.01, 1.0, 0.01),
             Field::Far => (16.0, 2048.0, 16.0),
@@ -171,6 +174,7 @@ impl Field {
 
     pub fn label(self) -> &'static str {
         match self {
+            Field::FilmLength => "cinematix.field.film_length",
             Field::Fov => "cinematix.field.fov",
             Field::Near => "cinematix.field.near",
             Field::Far => "cinematix.field.far",
@@ -191,6 +195,13 @@ impl Field {
 
     pub fn get(self, doc: &Document) -> f64 {
         match self {
+            Field::FilmLength => {
+                if doc.scene.meta.open_ended {
+                    0.0
+                } else {
+                    doc.scene.meta.range.1 - doc.scene.meta.range.0
+                }
+            }
             Field::Fps => doc.scene.meta.fps as f64,
             Field::Width => f64::from(doc.scene.meta.resolution.0),
             Field::Height => f64::from(doc.scene.meta.resolution.1),
@@ -211,7 +222,8 @@ impl Field {
                     Field::Fps => doc.scene.meta.fps as f64,
                     Field::Width => f64::from(doc.scene.meta.resolution.0),
                     Field::Height => f64::from(doc.scene.meta.resolution.1),
-                    Field::Time
+                    Field::FilmLength
+                    | Field::Time
                     | Field::Rain
                     | Field::Thunder
                     | Field::FogStart
@@ -228,6 +240,12 @@ impl Field {
         let (min, max, _) = self.range();
         let v = v.clamp(min, max);
         match self {
+            Field::FilmLength => {
+                doc.scene.meta.open_ended = v == 0.0;
+                if v > 0.0 {
+                    doc.scene.meta.range.1 = doc.scene.meta.range.0 + v;
+                }
+            }
             Field::Fps => doc.scene.meta.fps = v as f32,
             Field::Width => doc.scene.meta.resolution.0 = v as u32,
             Field::Height => doc.scene.meta.resolution.1 = v as u32,
@@ -249,6 +267,7 @@ impl Field {
                         Field::Fps
                         | Field::Width
                         | Field::Height
+                        | Field::FilmLength
                         | Field::Time
                         | Field::Rain
                         | Field::Thunder
@@ -269,6 +288,7 @@ impl Field {
             Field::Fps => " fps",
             Field::Width | Field::Height => " px",
             Field::Time => " t",
+            Field::FilmLength => " s",
             Field::ShakeFrequency => " Hz",
             Field::Aperture | Field::Rain | Field::Thunder => "",
         }
@@ -369,6 +389,7 @@ enum Drag {
     ClipEdge {
         clip: usize,
         edge: u8,
+        range: (f64, f64),
     },
 }
 
@@ -601,7 +622,7 @@ impl Editor {
     }
 
     pub fn range(&self) -> (f64, f64) {
-        self.doc.scene.meta.range
+        self.doc.playback_range()
     }
 
     fn max_scroll(&self) -> usize {
@@ -625,13 +646,35 @@ impl Editor {
 
     pub fn fit(&mut self) {
         let (r0, r1) = self.range();
-        let (t0, t1) = window_for(r0, r1);
+        let (t0, t1) = window_for(
+            r0,
+            r1.max(if self.doc.scene.meta.open_ended {
+                self.time()
+            } else {
+                r1
+            }),
+        );
         self.set_window(t0, t1);
     }
 
     pub fn seek(&mut self, t: f64) {
-        let (r0, r1) = self.range();
-        self.playhead.t = t.clamp(r0.min(r1), r0.max(r1));
+        self.seek_in_place(t);
+        if self.doc.scene.meta.open_ended && !(self.t0..=self.t1).contains(&self.time()) {
+            let half = (self.t1 - self.t0) * 0.5;
+            self.set_window((self.time() - half).max(self.range().0), self.time() + half);
+        }
+    }
+
+    fn seek_in_place(&mut self, t: f64) {
+        if !t.is_finite() {
+            return;
+        }
+        let (start, end) = self.doc.scene.meta.range;
+        self.playhead.t = if self.doc.scene.meta.open_ended {
+            t.max(start)
+        } else {
+            t.clamp(start.min(end), start.max(end))
+        };
     }
 
     pub fn seek_frame(&mut self, frame: i64) {
@@ -646,7 +689,7 @@ impl Editor {
         } else {
             t
         };
-        self.seek(t);
+        self.seek_in_place(t);
     }
 
     pub fn step(&mut self, frames: i64) {
@@ -819,12 +862,17 @@ impl Editor {
         }
     }
 
-    pub fn wheel(&mut self, ticks: f32, ctrl: bool) -> bool {
+    pub fn wheel(&mut self, ticks: f32, mods: Mods) -> bool {
         if ticks == 0.0 {
             return false;
         }
-        if ctrl {
+        if mods.ctrl {
             self.zoom(if ticks > 0.0 { 1.25 } else { 0.8 });
+        } else if mods.shift {
+            let span = self.t1 - self.t0;
+            let start = (self.t0 - f64::from(ticks) * span * 0.25)
+                .max(self.doc.scene.meta.range.0 - span * 0.02);
+            self.set_window(start, start + span);
         } else {
             let step = if ticks > 0.0 { 3 } else { -3 };
             let next = (self.scroll as i64 + i64::from(step)).clamp(0, self.max_scroll() as i64);
@@ -974,6 +1022,7 @@ impl Editor {
                     self.drag = Some(Drag::ClipEdge {
                         clip: i,
                         edge: *edge,
+                        range: self.range(),
                     });
                     return true;
                 }
@@ -1065,7 +1114,9 @@ impl Editor {
                 let frac = f64::from((pos.0 - r.x - 4.0) / track);
                 let scrub = cinematix_ui::Scrubber::new(field.get(&self.doc), min, max, step);
                 self.checkpoint();
-                field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
+                if *field != Field::FilmLength {
+                    field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
+                }
                 self.drag = Some(Drag::Number {
                     field: *field,
                     start: field.get(&self.doc),
@@ -1149,7 +1200,7 @@ impl Editor {
     }
 
     fn add_clip(&mut self) {
-        let (r0, r1) = self.range();
+        let (r0, r1) = self.doc.clip_edit_range(self.t1);
         let start = self.t0.max(r0).min(r1);
         let end = self.t1.max(start + f64::from(1.0 / self.fps())).min(r1);
         self.checkpoint();
@@ -1269,6 +1320,9 @@ impl Editor {
                 let (min, max, step) = field.range();
                 let scrub = cinematix_ui::Scrubber::new(start, min, max, step);
                 field.set(&mut self.doc, scrub.drag(pos.0 - start_x, mods));
+                if field == Field::FilmLength {
+                    self.seek_in_place(self.time());
+                }
                 true
             }
             Drag::TimelineSplit { start, y } => {
@@ -1281,21 +1335,24 @@ impl Editor {
                 self.inspector_frac = (start + (x - pos.0) / width).clamp(0.12, 0.4);
                 true
             }
-            Drag::ClipEdge { clip, edge } => {
+            Drag::ClipEdge {
+                clip,
+                edge,
+                range: (r0, r1),
+            } => {
                 let Some(track) = f.clip_track else {
                     return false;
                 };
-                let (r0, r1) = self.range();
                 let frac = ((pos.0 - track.x) / track.w.max(1.0)).clamp(0.0, 1.0);
                 let t = r0 + f64::from(frac) * (r1 - r0);
                 let min = f64::from(1.0 / self.fps());
                 match self.doc.scene.meta.clips.get_mut(clip) {
                     Some(c) if edge == 0 => {
-                        c.start = t.clamp(r0, c.end - min);
+                        c.start = t.clamp(r0, (c.end - min).max(r0));
                         true
                     }
                     Some(c) => {
-                        c.end = t.clamp(c.start + min, r1);
+                        c.end = t.clamp((c.start + min).min(r1), r1);
                         true
                     }
                     None => false,
@@ -1462,6 +1519,9 @@ impl Editor {
     pub fn release(&mut self, pos: (f32, f32)) -> bool {
         let panel = matches!(self.drag, Some(Drag::Panel { .. }));
         let clip = matches!(self.drag, Some(Drag::ClipEdge { .. }));
+        if self.dragging_field(Field::FilmLength) {
+            self.fit();
+        }
         if panel && self.inspector_float.is_some() && pos.0 >= self.size.0 - 48.0 {
             self.inspector_float = None;
         }
@@ -1980,9 +2040,8 @@ impl Editor {
     pub fn adopt_document(&mut self, doc: Document) {
         self.checkpoint();
         self.doc = doc;
-        let (r0, r1) = self.doc.scene.meta.range;
         self.playhead.fps = self.doc.scene.meta.fps.round().max(1.0);
-        self.seek(self.playhead.t.clamp(r0.min(r1), r0.max(r1)));
+        self.seek_in_place(self.playhead.t);
         self.fit();
         self.selected_channel = None;
         self.selected_key = None;
@@ -2162,6 +2221,65 @@ mod tests {
         assert!((coarse - (before + 1.0)).abs() < 1e-6, "{coarse}");
         assert!((shifted - (before + 10.0)).abs() < 1e-6, "{shifted}");
         assert!((fine - (before + 0.1)).abs() < 1e-4, "{fine}");
+    }
+
+    #[test]
+    fn unlimited_timeline_can_pan_and_key_past_ten_seconds() {
+        let mut e = editor();
+        assert!(e.doc.scene.meta.open_ended);
+        for _ in 0..8 {
+            assert!(e.wheel(
+                -1.0,
+                Mods {
+                    shift: true,
+                    ..Mods::default()
+                }
+            ));
+        }
+        let f = e.frame();
+        assert!(e.press(
+            (f.ruler.x + f.ruler.w * 0.5, f.ruler.y + 4.0),
+            Mods::default()
+        ));
+        e.release((0.0, 0.0));
+        let t = e.time();
+        assert!(t > 20.0);
+        assert!(e.add_key());
+        assert_eq!(e.range(), (0.0, t + 1.0 / 24.0));
+        e.looping = false;
+        e.playing = true;
+        e.advance(100.0);
+        assert_eq!(e.time(), e.range().1);
+        assert!(!e.playing);
+    }
+
+    #[test]
+    fn film_inspector_length_can_set_and_clear_a_fixed_end() {
+        let mut e = editor();
+        e.section = Section::Film;
+        let (_, r) = e
+            .frame()
+            .fields
+            .into_iter()
+            .find(|(f, _)| *f == Field::FilmLength)
+            .unwrap();
+        let pos = (r.x + 8.0, r.y + 4.0);
+        assert!(e.press(pos, Mods::default()));
+        assert!(e.drag_to(
+            (pos.0 + 18.0, pos.1),
+            Mods {
+                shift: true,
+                ..Mods::default()
+            }
+        ));
+        e.release(pos);
+        assert_eq!(e.range(), (0.0, 30.0));
+        e.seek(45.0);
+        assert_eq!(e.time(), 30.0);
+        assert!(e.undo());
+        e.seek(45.0);
+        assert_eq!(e.time(), 45.0);
+        assert!(e.window().1 >= 45.0);
     }
 
     #[test]

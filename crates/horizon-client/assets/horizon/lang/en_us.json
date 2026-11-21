@@ -1362,6 +1362,8 @@
   "cinematix.field.far": "Far plane",
   "cinematix.field.focus": "Focus distance",
   "cinematix.field.aperture": "Aperture",
+  "cinematix.field.film_length": "Length",
+  "cinematix.film.unlimited": "Unlimited",
   "cinematix.field.fps": "FPS",
   "cinematix.header.frame": "Frame %s",
   "cinematix.header.time": "Time %s s",

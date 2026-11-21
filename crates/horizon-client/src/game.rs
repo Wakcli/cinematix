@@ -9408,7 +9408,7 @@ impl Game<'_> {
                     };
                     let d = scaled(raw_y) as f32;
                     if self.screen == Screen::Cinematix {
-                        self.cinematix_wheel(d, self.modifiers.control_key());
+                        self.cinematix_wheel(d);
                         return Ok(());
                     }
                     // ScreenEvent.MouseScrolled.Pre: the open screen hears of
