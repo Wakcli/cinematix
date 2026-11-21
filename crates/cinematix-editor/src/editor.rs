@@ -690,8 +690,20 @@ impl Editor {
         let key = if self.preview_free && target.node == self.doc.scene.camera {
             match target.prop {
                 Prop::Translation => {
-                    self.doc
-                        .upsert_key(ci, t, Value::Vec3(self.free_pos.to_array()))
+                    let key = self
+                        .doc
+                        .upsert_key(ci, t, Value::Vec3(self.free_pos.to_array()));
+                    // A position capture in Free View records the framing as well.
+                    if key.is_some()
+                        && let Some(rotation) = self
+                            .doc
+                            .channel_index(self.doc.scene.camera, Prop::Rotation)
+                    {
+                        let view = rotation_from_view(self.free_yaw, self.free_pitch);
+                        self.doc
+                            .upsert_key(rotation, t, Value::Quat(view.to_array()));
+                    }
+                    key
                 }
                 Prop::Rotation => self.doc.upsert_key(
                     ci,
@@ -2093,15 +2105,29 @@ mod tests {
     }
 
     #[test]
-    fn first_camera_key_captures_detached_position() {
+    fn detached_position_keys_capture_the_view_direction_and_undo_together() {
         let mut e = editor();
         e.toggle_free_view();
         let position = Vec3::new(2.0, 5.0, 8.0);
         e.free_nudge(position);
+        e.free_look(35.0, 20.0);
+        let first_view = e.preview_rotation().unwrap();
         assert_eq!(e.doc.key_count(), 0);
         assert!(e.add_key());
-        assert_eq!(e.doc.key_count(), 1);
+        assert_eq!(e.doc.key_count(), 2);
         assert_eq!(e.camera_at(0.0).unwrap().0, position);
+        assert!(e.camera_at(0.0).unwrap().1.dot(first_view).abs() > 0.99999);
+
+        e.seek_frame(24);
+        e.free_look(-75.0, -30.0);
+        let second_view = e.preview_rotation().unwrap();
+        assert!(e.add_key());
+        e.toggle_free_view();
+        assert_eq!(e.doc.key_count(), 4);
+        assert!(e.preview_rotation().unwrap().dot(second_view).abs() > 0.99999);
+        assert!(e.camera_at(0.5).unwrap().1.dot(first_view).abs() < 0.99);
+        e.undo();
+        assert_eq!(e.doc.key_count(), 2);
     }
 
     #[test]
