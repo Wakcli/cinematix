@@ -1767,6 +1767,7 @@ struct Game<'a> {
     /// Cinematix's film document and editor state (game/interface/cinematix.rs).
     pub(super) cinematix: cinematix_editor::Editor,
     /// The pointer position the editor's right-button look last saw, while it is held.
+    cinematix_bend: Option<BendDrag>,
     pub(super) cinematix_look: Option<(f32, f32)>,
     /// A running `cinematix render` (game/interface/cinematix_export.rs).
     pub(super) cinematix_export: Option<cinematix_export::Render>,
@@ -10957,6 +10958,7 @@ impl<'a> Game<'a> {
             replay: Default::default(),
             studio: Default::default(),
             cinematix: Default::default(),
+            cinematix_bend: None,
             cinematix_look: None,
             cinematix_export: None,
             cinematix_world: Default::default(),
@@ -11653,4 +11655,13 @@ fn block_entity_reach(resources: &Resources) -> Arc<[u8]> {
                 .collect()
         })
         .clone()
+}
+
+struct BendDrag {
+    segment: (f64, f64),
+    cursor: (f32, f32),
+    midpoint: glam::Vec3,
+    right: glam::Vec3,
+    up: glam::Vec3,
+    units_per_pixel: f32,
 }

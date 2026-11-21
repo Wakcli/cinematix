@@ -689,8 +689,15 @@ impl Editor {
         let target = &self.doc.channels[ci].target;
         let key = if self.preview_free && target.node == self.doc.scene.camera {
             match target.prop {
-                Prop::Translation => self.doc.upsert_key(ci, t, Value::Vec3(self.free_pos.to_array())),
-                Prop::Rotation => self.doc.upsert_key(ci, t, Value::Quat(rotation_from_view(self.free_yaw, self.free_pitch).to_array())),
+                Prop::Translation => {
+                    self.doc
+                        .upsert_key(ci, t, Value::Vec3(self.free_pos.to_array()))
+                }
+                Prop::Rotation => self.doc.upsert_key(
+                    ci,
+                    t,
+                    Value::Quat(rotation_from_view(self.free_yaw, self.free_pitch).to_array()),
+                ),
                 _ => self.doc.insert_key(ci, t),
             }
         } else {
@@ -1664,6 +1671,53 @@ impl Editor {
 
     /// The times of the camera's translation keys, or nothing when the camera has no path.
     /// Flashback's overlay and ours use this as the segment list.
+    pub fn can_pick_bend(&self, cursor: (f32, f32)) -> bool {
+        let frame = self.frame();
+        self.preview_free
+            && self.menu.is_none()
+            && self.drag.is_none()
+            && frame.viewport.contains(cursor.0, cursor.1)
+            && !frame.inspector.contains(cursor.0, cursor.1)
+    }
+
+    pub fn bend_segment(&self) -> Option<(f64, f64)> {
+        let channel = self
+            .doc
+            .channel_index(self.doc.scene.camera, Prop::Translation)?;
+        let channel = &self.doc.channels[channel];
+        if channel.muted || channel.keys.len() < 2 {
+            return None;
+        }
+        let i = channel
+            .keys
+            .partition_point(|k| k.t <= self.time())
+            .saturating_sub(1)
+            .min(channel.keys.len() - 2);
+        let (a, b) = (channel.keys[i].t, channel.keys[i + 1].t);
+        (a < b).then_some((a, b))
+    }
+
+    pub fn bend_camera_segment(&mut self, segment: (f64, f64), midpoint: Vec3) {
+        let Some(ci) = self
+            .doc
+            .channel_index(self.doc.scene.camera, Prop::Translation)
+        else {
+            return;
+        };
+        let keys = &mut self.doc.channels[ci].keys;
+        let Some(i) = keys.windows(2).position(|k| (k[0].t, k[1].t) == segment) else {
+            return;
+        };
+        if let (Value::Vec3(a), Value::Vec3(b)) = (keys[i].v, keys[i + 1].v) {
+            let offset = midpoint - Vec3::from_array(a).lerp(Vec3::from_array(b), 0.5);
+            if offset.is_finite() {
+                keys[i].interp = Interp::Quadratic {
+                    midpoint_offset: offset.to_array(),
+                };
+            }
+        }
+    }
+
     pub fn camera_path_times(&self) -> Vec<f64> {
         let id = self.doc.scene.camera;
         let Some(ci) = self.doc.channel_index(id, Prop::Translation) else {

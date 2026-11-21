@@ -3,7 +3,7 @@
 //! document, the frame layout, the drawing) is `cinematix-editor`; this file only connects it to
 //! the game's screen, pointer and key dispatch.
 
-use super::{Game, HudBatch, Screen};
+use super::{BendDrag, Game, HudBatch, Screen};
 use cinematix_editor::{EditorKey, Interp, KeyResult, Mods, Prop, Section};
 use glam::{Quat, Vec3};
 use horizon_client::gizmos::{Gizmos, Line};
@@ -101,13 +101,10 @@ impl Game<'_> {
         }
         let pose = (self.view.eye, self.yaw, self.pitch);
         self.screen = Screen::Cinematix;
-        let position = Vec3::new(
-            pose.0[0] as f32,
-            pose.0[1] as f32,
-            pose.0[2] as f32,
-        );
+        let position = Vec3::new(pose.0[0] as f32, pose.0[1] as f32, pose.0[2] as f32);
         self.cinematix.take_pose(position, pose.1, pose.2, false);
         self.cinematix_look = None;
+        self.cinematix_bend = None;
         let _ = self.sync_cinematix_world();
         self.keys.clear();
         self.left = false;
@@ -123,6 +120,7 @@ impl Game<'_> {
         if self.screen == Screen::Cinematix {
             self.cinematix.playing = false;
             self.cinematix_look = None;
+            self.cinematix_bend = None;
             self.clear_cinematix_world();
             self.screen = Screen::Playing;
             self.capture(true);
@@ -173,7 +171,11 @@ impl Game<'_> {
         }
         let result = match editor_key {
             EditorKey::Left | EditorKey::Right if mods.shift => {
-                let frames = if editor_key == EditorKey::Left { -10 } else { 10 };
+                let frames = if editor_key == EditorKey::Left {
+                    -10
+                } else {
+                    10
+                };
                 self.cinematix.step(frames);
                 KeyResult::Consumed
             }
@@ -207,12 +209,53 @@ impl Game<'_> {
         if button == winit::event::MouseButton::Left {
             if pressed {
                 let mods = self.cinematix_mods();
-                self.cinematix.press(self.cursor, mods);
+                if {
+                    self.cinematix.press(self.cursor, mods);
+                    self.cinematix.can_pick_bend(self.cursor)
+                } {
+                    self.cinematix_bend = self.pick_cinematix_bend();
+                    if self.cinematix_bend.is_some() {
+                        self.cinematix.checkpoint();
+                    }
+                }
             } else {
+                self.cinematix_bend = None;
                 self.cinematix.release(self.cursor);
             }
         }
         true
+    }
+
+    fn pick_cinematix_bend(&self) -> Option<BendDrag> {
+        let ed = &self.cinematix;
+        let frame = ed.frame();
+        if !ed.preview_free || !frame.viewport.contains(self.cursor.0, self.cursor.1) {
+            return None;
+        }
+        let segment = ed.bend_segment()?;
+        let midpoint = ed.camera_at((segment.0 + segment.1) * 0.5)?.0;
+        let (eye, yaw, pitch) = ed.preview_view()?;
+        let view = horizon_client::camera::view_matrix(yaw, pitch);
+        let local = view.transform_vector3(midpoint - Vec3::from_array(eye.map(|v| v as f32)));
+        if local.z >= -0.05 {
+            return None;
+        }
+        let fov = ed.preview_fov().clamp(1.0, 179.0).to_radians();
+        let units_per_pixel = -2.0 * local.z * (fov * 0.5).tan() / frame.size.1;
+        let x = frame.size.0 * 0.5 + local.x / units_per_pixel;
+        let y = frame.size.1 * 0.5 - local.y / units_per_pixel;
+        if (self.cursor.0 - x).hypot(self.cursor.1 - y) > 12.0 {
+            return None;
+        }
+        let inverse = view.transpose();
+        Some(BendDrag {
+            segment,
+            cursor: self.cursor,
+            midpoint,
+            right: inverse.transform_vector3(Vec3::X),
+            up: inverse.transform_vector3(Vec3::Y),
+            units_per_pixel,
+        })
     }
 
     /// The pointer moved while the editor is up: an active drag follows it.
@@ -221,6 +264,16 @@ impl Game<'_> {
             return false;
         }
         if self.cinematix_export.is_some() {
+            return true;
+        }
+        if let Some(drag) = &self.cinematix_bend {
+            let dx = self.cursor.0 - drag.cursor.0;
+            let dy = self.cursor.1 - drag.cursor.1;
+            let midpoint = drag.midpoint + (drag.right * dx - drag.up * dy) * drag.units_per_pixel;
+            let segment = drag.segment;
+            if dx != 0.0 || dy != 0.0 {
+                self.cinematix.bend_camera_segment(segment, midpoint);
+            }
             return true;
         }
         if let Some(last) = self.cinematix_look {
@@ -288,8 +341,7 @@ impl Game<'_> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or_default();
-                let path = film_path()
-                    .with_file_name(format!("render-{stamp}.mp4"));
+                let path = film_path().with_file_name(format!("render-{stamp}.mp4"));
                 if let Some(parent) = path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -386,6 +438,11 @@ impl Game<'_> {
                     if current { PATH_FULL } else { PATH_FADE },
                 );
             }
+            if let Some((a, b)) = ed.bend_segment()
+                && let Some((midpoint, _)) = ed.camera_at((a + b) * 0.5)
+            {
+                key_cross(g, midpoint, PATH_FULL);
+            }
             for (i, &at) in times.iter().enumerate() {
                 let Some((position, rotation)) = ed.camera_at(at) else {
                     continue;
@@ -473,10 +530,7 @@ impl Game<'_> {
                 "render" => "horizon.cinematix.render_started",
                 "camera" if words.get(1) == Some(&"pose") => "horizon.cinematix.pose",
                 "camera"
-                    if matches!(
-                        words.get(1),
-                        Some(&"orbit" | &"dolly" | &"rail" | &"shake")
-                    ) =>
+                    if matches!(words.get(1), Some(&"orbit" | &"dolly" | &"rail" | &"shake")) =>
                 {
                     "horizon.cinematix.camera"
                 }
@@ -567,11 +621,17 @@ impl Game<'_> {
             "frame" => {
                 let n = match words.get(1).and_then(|w| w.parse::<i64>().ok()) {
                     Some(n) => n,
-                    None => return Ok(Some(json!({ "ok": false, "error": "frame needs a number" }))),
+                    None => {
+                        return Ok(Some(
+                            json!({ "ok": false, "error": "frame needs a number" }),
+                        ));
+                    }
                 };
                 self.cinematix.seek_frame(n);
                 let _ = self.sync_cinematix_world();
-                Ok(Some(json!({ "ok": true, "frame": self.cinematix.frame_number(), "time": self.cinematix.time() })))
+                Ok(Some(
+                    json!({ "ok": true, "frame": self.cinematix.frame_number(), "time": self.cinematix.time() }),
+                ))
             }
             "seek" => {
                 let t = match words.get(1).and_then(|w| w.parse::<f64>().ok()) {
@@ -580,7 +640,9 @@ impl Game<'_> {
                 };
                 self.cinematix.seek(t);
                 let _ = self.sync_cinematix_world();
-                Ok(Some(json!({ "ok": true, "frame": self.cinematix.frame_number(), "time": self.cinematix.time() })))
+                Ok(Some(
+                    json!({ "ok": true, "frame": self.cinematix.frame_number(), "time": self.cinematix.time() }),
+                ))
             }
             "key" => {
                 let added = self.cinematix.add_key();
@@ -650,8 +712,12 @@ impl Game<'_> {
                     self.end_cinematix_render(Err("cancelled".into()));
                     return Ok(Some(json!({ "ok": true, "cancelled": running })));
                 }
-                let numbers: Option<Vec<u32>> =
-                    words.get(1..6).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                let numbers: Option<Vec<u32>> = words
+                    .get(1..6)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|w| w.parse().ok())
+                    .collect();
                 let Some(v) = numbers.filter(|v| v.len() == 5) else {
                     return Ok(Some(json!({
                         "ok": false,
@@ -665,26 +731,29 @@ impl Game<'_> {
                     })));
                 };
                 let resume = words.get(7) == Some(&"--resume");
-                return self.start_cinematix_render(
-                    v[0], v[1], v[2], v[3], v[4], path, resume, reply,
-                );
+                return self
+                    .start_cinematix_render(v[0], v[1], v[2], v[3], v[4], path, resume, reply);
             }
             "new" => {
-                self.cinematix.adopt_document(cinematix_editor::Document::new());
+                self.cinematix
+                    .adopt_document(cinematix_editor::Document::new());
                 if self.cinematix_open() {
                     let eye = self.view.eye;
-                    let position =
-                        Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
-                    self.cinematix.take_pose(position, self.yaw, self.pitch, false);
+                    let position = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
+                    self.cinematix
+                        .take_pose(position, self.yaw, self.pitch, false);
                 }
-                Ok(Some(json!({ "ok": true, "channels": self.cinematix.doc.channels.len() })))
+                Ok(Some(
+                    json!({ "ok": true, "channels": self.cinematix.doc.channels.len() }),
+                ))
             }
             "camera" => match words.get(1).copied() {
                 Some("player") => {
                     let eye = self.view.eye;
-                    let position =
-                        Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
-                    let took = self.cinematix.take_pose(position, self.yaw, self.pitch, true);
+                    let position = Vec3::new(eye[0] as f32, eye[1] as f32, eye[2] as f32);
+                    let took = self
+                        .cinematix
+                        .take_pose(position, self.yaw, self.pitch, true);
                     Ok(Some(json!({
                         "ok": true, "took": took,
                         "camera": self.cinematix.camera_status().map(|(p, yaw, pitch, fov)| json!({
@@ -724,7 +793,9 @@ impl Game<'_> {
                     };
                     let center = Vec3::new(v[0], v[1], v[2]);
                     let frames = v[4].round().max(1.0) as u32;
-                    let ok = self.cinematix.orbit(center, v[3], frames, v.get(5).copied());
+                    let ok = self
+                        .cinematix
+                        .orbit(center, v[3], frames, v.get(5).copied());
                     Ok(Some(json!({
                         "ok": ok, "frame": self.cinematix.frame_number(),
                         "keys": self.cinematix.doc.key_count(),
@@ -801,8 +872,12 @@ impl Game<'_> {
                 match words.get(1).copied() {
                     None | Some("status") => {}
                     Some("range") => {
-                        let values: Option<Vec<f64>> =
-                            words.get(2..4).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                        let values: Option<Vec<f64>> = words
+                            .get(2..4)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|w| w.parse().ok())
+                            .collect();
                         let Some(v) = values.filter(|v| v.len() == 2 && v[1] > v[0]) else {
                             return Ok(Some(json!({
                                 "ok": false,
@@ -820,8 +895,12 @@ impl Game<'_> {
                         meta.fps = v.clamp(1.0, 240.0);
                     }
                     Some("size") => {
-                        let values: Option<Vec<u32>> =
-                            words.get(2..4).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                        let values: Option<Vec<u32>> = words
+                            .get(2..4)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|w| w.parse().ok())
+                            .collect();
                         let Some(v) = values.filter(|v| v.len() == 2) else {
                             return Ok(Some(json!({
                                 "ok": false, "error": "meta size needs WIDTH HEIGHT",
@@ -877,8 +956,12 @@ impl Game<'_> {
                         if !ed.preview_free {
                             ed.toggle_free_view();
                         }
-                        let values: Option<Vec<f32>> =
-                            words.get(2..7).unwrap_or_default().iter().map(|w| w.parse().ok()).collect();
+                        let values: Option<Vec<f32>> = words
+                            .get(2..7)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|w| w.parse().ok())
+                            .collect();
                         if let Some(v) = values.filter(|v| v.len() == 5) {
                             ed.free_pos = Vec3::new(v[0], v[1], v[2]);
                             ed.free_yaw = v[3];
@@ -906,7 +989,10 @@ impl Game<'_> {
                     words
                         .get(i)
                         .ok_or_else(|| "env needs a value".into())
-                        .and_then(|w| w.parse::<f32>().map_err(|_| format!("{w}: not a number").into()))
+                        .and_then(|w| {
+                            w.parse::<f32>()
+                                .map_err(|_| format!("{w}: not a number").into())
+                        })
                         .map(|v| v.clamp(lo, hi))
                 };
                 let detail = match words.get(1).copied() {
@@ -1017,7 +1103,9 @@ impl Game<'_> {
             }
             "section" => {
                 let Some(name) = words.get(1).copied() else {
-                    return Ok(Some(json!({ "ok": false, "error": "section needs a name" })));
+                    return Ok(Some(
+                        json!({ "ok": false, "error": "section needs a name" }),
+                    ));
                 };
                 match section_named(name) {
                     Some(section) => {
@@ -1066,7 +1154,11 @@ mod tests {
         let mut g = Gizmos::default();
         camera_frustum(&mut g, Vec3::ZERO, Quat::IDENTITY, 70.0, PATH_KEY);
         assert_eq!(g.on_top.len(), 8);
-        assert!(g.on_top.iter().all(|l| l.color == PATH_KEY && l.width > 0.0));
+        assert!(
+            g.on_top
+                .iter()
+                .all(|l| l.color == PATH_KEY && l.width > 0.0)
+        );
         assert!(g.lines.is_empty());
     }
 
@@ -1078,7 +1170,6 @@ mod tests {
         assert!(g.on_top.iter().all(|l| l.color == PATH_SELECTED));
     }
 }
-
 
 const PATH_FULL: u32 = 0xFFFF_D700;
 const PATH_FADE: u32 = 0x80FF_D700;
@@ -1144,9 +1235,25 @@ fn camera_frustum(g: &mut Gizmos, position: Vec3, rotation: Quat, fov: f32, colo
 
 fn key_cross(g: &mut Gizmos, position: Vec3, colour: u32) {
     let r = 0.18;
-    path_line(g, position - Vec3::X * r, position + Vec3::X * r, colour, 2.0);
-    path_line(g, position - Vec3::Y * r, position + Vec3::Y * r, colour, 2.0);
-    path_line(g, position - Vec3::Z * r, position + Vec3::Z * r, colour, 2.0);
+    path_line(
+        g,
+        position - Vec3::X * r,
+        position + Vec3::X * r,
+        colour,
+        2.0,
+    );
+    path_line(
+        g,
+        position - Vec3::Y * r,
+        position + Vec3::Y * r,
+        colour,
+        2.0,
+    );
+    path_line(
+        g,
+        position - Vec3::Z * r,
+        position + Vec3::Z * r,
+        colour,
+        2.0,
+    );
 }
-
-

@@ -70,6 +70,10 @@ pub enum Interp {
     /// Uniform Catmull-Rom through the neighbouring keys, the curve Studio's camera path uses.
     /// Positional values bend through their keys instead of easing on each axis.
     Spline,
+    /// Displacement of the path midpoint from the straight segment.
+    Quadratic {
+        midpoint_offset: [f32; 3],
+    },
     Bezier {
         out: [f32; 2],
         in_: [f32; 2],
@@ -134,6 +138,18 @@ fn blend(keys: &[Key], i: usize, u: f32) -> Value {
         Interp::Linear => u,
         Interp::Smooth => u * u * (3.0 - 2.0 * u),
         Interp::Spline => return spline(keys, i, u),
+        Interp::Quadratic { midpoint_offset } => {
+            let v = a.v.lerp(b.v, u);
+            return match v {
+                Value::Vec3(mut position) => {
+                    for (component, offset) in position.iter_mut().zip(midpoint_offset) {
+                        *component += 4.0 * u * (1.0 - u) * offset;
+                    }
+                    Value::Vec3(position)
+                }
+                _ => v,
+            };
+        }
         Interp::Bezier { out, in_ } => bezier(out, in_, u),
     };
     a.v.lerp(b.v, u)
@@ -376,6 +392,28 @@ mod tests {
             v: Value::Vec3([x, y, z]),
             interp,
         }
+    }
+
+    #[test]
+    fn quadratic_midpoint_bends_without_moving_endpoints() {
+        let keys = [
+            Key {
+                t: 0.0,
+                v: Value::Vec3([0.0, 0.0, 0.0]),
+                interp: Interp::Quadratic {
+                    midpoint_offset: [0.0, 4.0, 0.0],
+                },
+            },
+            Key {
+                t: 2.0,
+                v: Value::Vec3([8.0, 0.0, 0.0]),
+                interp: Interp::Linear,
+            },
+        ];
+        assert_eq!(blend(&keys, 1, 0.0), keys[0].v);
+        assert_eq!(blend(&keys, 1, 0.25), Value::Vec3([2.0, 3.0, 0.0]));
+        assert_eq!(blend(&keys, 1, 0.5), Value::Vec3([4.0, 4.0, 0.0]));
+        assert_eq!(blend(&keys, 1, 1.0), keys[1].v);
     }
 
     #[test]
