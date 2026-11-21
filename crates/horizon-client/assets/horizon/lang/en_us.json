@@ -1411,6 +1411,7 @@
   "cinematix.action.zoom_in": "Zoom in",
   "cinematix.action.zoom_out": "Zoom out",
   "cinematix.action.fit": "Fit film",
+  "cinematix.viewport.frame_curve": "Shift+F: Frame camera path",
   "cinematix.tab.dope_sheet": "Dope Sheet",
   "cinematix.tab.curves": "Curve Editor",
   "cinematix.tab.clips": "Clips",

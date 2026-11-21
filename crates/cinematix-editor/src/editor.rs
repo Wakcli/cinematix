@@ -1709,6 +1709,71 @@ impl Editor {
         (a < b).then_some((a, b))
     }
 
+    /// Frame the active segment with the detached camera only. Sample the evaluated
+    /// curve so even a segment that already has a large bend fits in the view.
+    pub fn frame_bend_segment(&mut self) -> bool {
+        let Some((a, b)) = self.bend_segment() else {
+            return false;
+        };
+        let Some((start, _)) = self.camera_at(a) else {
+            return false;
+        };
+        let Some((end, _)) = self.camera_at(b) else {
+            return false;
+        };
+        let Some((center, _)) = self.camera_at(a + (b - a) * 0.5) else {
+            return false;
+        };
+        let radius = (0..=16)
+            .filter_map(|i| self.camera_at(a + (b - a) * f64::from(i) / 16.0))
+            .map(|(p, _)| p.distance(center))
+            .fold(0.0_f32, f32::max)
+            .max(1.0);
+        let side = (end - start)
+            .cross(Vec3::Y)
+            .try_normalize()
+            .unwrap_or(Vec3::X);
+        let frame = self.frame();
+        let mut stage = frame.viewport;
+        if frame.inspector_floating {
+            // Frame into the largest unobstructed part of the stage.
+            let r = frame.inspector;
+            let right = stage.x + stage.w;
+            let bottom = stage.y + stage.h;
+            stage = [
+                Rect::new(stage.x, stage.y, (r.x - stage.x).max(0.0), stage.h),
+                Rect::new(r.x + r.w, stage.y, (right - r.x - r.w).max(0.0), stage.h),
+                Rect::new(stage.x, stage.y, stage.w, (r.y - stage.y).max(0.0)),
+                Rect::new(stage.x, r.y + r.h, stage.w, (bottom - r.y - r.h).max(0.0)),
+            ]
+            .into_iter()
+            .max_by(|a, b| a.w.min(a.h).total_cmp(&b.w.min(b.h)))
+            .unwrap();
+        }
+        let margin = stage.w.min(stage.h) * 0.5;
+        if margin <= 0.0 {
+            return false;
+        }
+        let half_fov = self.preview_fov().clamp(1.0, 179.0).to_radians() * 0.5;
+        let focal = frame.size.1 * 0.5 / half_fov.tan();
+        let desired_x = stage.x + stage.w * 0.5 - frame.size.0 * 0.5;
+        let desired_y = stage.y + stage.h * 0.5 - frame.size.1 * 0.5;
+        let distant = (side + Vec3::Y * 0.25).normalize();
+        let (yaw, pitch) = look_at(center + distant, center);
+        let rotation = rotation_from_view(yaw, pitch);
+        let shift = Vec3::new(-desired_x / focal, desired_y / focal, 0.0);
+        let distance = radius * (1.0 + 1.25 * (focal + desired_x.hypot(desired_y)) / margin);
+        let eye = center + rotation * ((Vec3::Z + shift) * distance);
+        if !eye.is_finite() {
+            return false;
+        }
+        self.preview_free = true;
+        self.free_pos = eye;
+        (self.free_yaw, self.free_pitch) = (yaw, pitch);
+        self.playing = false;
+        true
+    }
+
     pub fn bend_camera_segment(&mut self, segment: (f64, f64), midpoint: Vec3) {
         let Some(ci) = self
             .doc
@@ -2898,6 +2963,33 @@ mod tests {
         let back = e.preview_view().unwrap();
         assert!((back.0[0] - film.0[0]).abs() < 1e-6);
         assert!((back.1 - film.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn framing_a_bend_aims_free_view_without_changing_the_film() {
+        let mut e = editor();
+        let ci = e
+            .doc
+            .channel_index(e.doc.scene.camera, Prop::Translation)
+            .unwrap();
+        e.doc.upsert_key(ci, 0.0, Value::Vec3([100.0, 10.0, 0.0]));
+        e.doc.upsert_key(ci, 2.0, Value::Vec3([120.0, 10.0, 0.0]));
+        e.seek(1.0);
+        e.bend_camera_segment((0.0, 2.0), Vec3::new(110.0, 10.0, 6.0));
+        let midpoint = e.camera_at(1.0).unwrap().0;
+        assert!(e.frame_bend_segment());
+        let (eye, yaw, pitch) = e.preview_view().unwrap();
+        let frame = e.frame();
+        let local = rotation_from_view(yaw, pitch).conjugate()
+            * (midpoint - Vec3::from_array(eye.map(|v| v as f32)));
+        let focal = frame.size.1 * 0.5 / (e.preview_fov().to_radians() * 0.5).tan();
+        let x = frame.size.0 * 0.5 + local.x * focal / -local.z;
+        let y = frame.size.1 * 0.5 - local.y * focal / -local.z;
+        assert!(local.z < 0.0 && frame.viewport.contains(x, y));
+        assert!(e.can_pick_bend((x, y)));
+        assert_eq!(e.doc.key_count(), 2);
+        assert_eq!(e.camera_at(1.0).unwrap().0, midpoint);
+        assert_eq!(e.time(), 1.0);
     }
 
     #[test]

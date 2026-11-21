@@ -8256,7 +8256,6 @@ impl Game<'_> {
         let mut lines = self.fishing_line(alpha, size);
         let mut g = self.debug_gizmos(alpha as f32, camera.to_array());
         self.studio_camera_path(&mut g);
-        self.cinematix_camera_path(&mut g);
         lines.extend(g.lines);
         let on_top = g.on_top;
         pr.lap("pr_debug");
@@ -11664,4 +11663,5 @@ struct BendDrag {
     right: glam::Vec3,
     up: glam::Vec3,
     units_per_pixel: f32,
+    moved: bool,
 }
