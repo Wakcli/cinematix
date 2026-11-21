@@ -310,6 +310,11 @@ impl Game<'_> {
     /// front of) it, pulled in where visual shapes are in the way. Returns the
     /// position, yaw and pitch to render from.
     pub(super) fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
+        if self.screen == Screen::Cinematix
+            && let Some((position, yaw, pitch)) = self.cinematix.preview_view()
+        {
+            return Some((glam::DVec3::from_array(position), yaw, pitch));
+        }
         if self.studio.flying() {
             return Some((
                 self.studio.freecam.position,

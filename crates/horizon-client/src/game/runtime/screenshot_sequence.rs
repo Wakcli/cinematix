@@ -54,43 +54,69 @@ fn parse(args: &str) -> Result<(u32, f64, PathBuf)> {
 
 impl Game<'_> {
     /// Why a sequence can't start (or go on) now, if it can't.
-    fn sequence_refusal(&self) -> Option<&'static str> {
+    fn sequence_refusal(&self) -> Option<String> {
+        self.stillness_refusal(true)
+    }
+
+    /// The stillness, world and settings a deterministic render needs. `playing` also requires
+    /// `Screen::Playing` (a screenshot sequence's own rule); `cinematix render` runs with its own
+    /// editor screen open, so it passes false and the camera comes from the film.
+    pub(super) fn stillness_refusal(&self, playing: bool) -> Option<String> {
         let g = &self.settings.horizon;
         if !self.clock.still() {
-            Some("screenshot-sequence needs HORIZON_STILL=1")
-        } else if !self.clock.frozen() || self.clock.stepping() || self.clock.sprinting() {
-            Some("screenshot-sequence needs the world frozen (/tick freeze), not stepping")
-        } else if self.title.is_some()
-            || self.screen != Screen::Playing
-            || self.player.is_none()
-            || self.integrated_starting.is_some()
-            || self.pending_entry.is_some()
-            || self.pack_reload.is_some()
-            || self.pending_save.is_some()
-            || self
-                .remote
-                .as_ref()
-                .is_some_and(|r| r.level_load.is_active())
-            || self.flight.is_some()
-            || self.world.chunks.is_empty()
-            || self.streaming.pending() != 0
-            || !self.pending_uploads.is_empty()
-            || self.remote_backlog() != 0
-            || !self.world.dirty_light.is_empty()
-            || !self.world.dirty_sections.is_empty()
-        {
-            Some("screenshot-sequence needs a loaded world in play, with nothing left to load")
-        } else if self.lod.is_some() || self.far_terrain_choice().0 > 0 {
-            // Far tiles load and fade in on the wall clock.
-            Some("screenshot-sequence needs far terrain off (LOD Distance 0)")
-        } else if self.settings.chunk_fade != 0.0 || g.shadow_cache {
-            Some("screenshot-sequence needs chunk fade 0 and the shadow cache off")
-        } else if g.taa || g.frame_generation != horizon_client::graphics::FrameGeneration::Off {
-            // Both build on earlier frames the pack's reset doesn't reach.
-            Some("screenshot-sequence needs TAA and frame generation off")
-        } else {
-            None
+            return Some("the world must be still: set HORIZON_STILL=1 or run /tick freeze".into());
         }
+        if !self.clock.frozen() || self.clock.stepping() || self.clock.sprinting() {
+            return Some("the world must be frozen (/tick freeze), not stepping or sprinting".into());
+        }
+        if self.title.is_some() {
+            return Some("the title screen is open".into());
+        }
+        if playing && self.screen != Screen::Playing {
+            return Some(format!("the {} screen is open, not the world", self.screen.id()));
+        }
+        if self.player.is_none() {
+            return Some("no player is in the world".into());
+        }
+        if self.integrated_starting.is_some() || self.pending_entry.is_some() {
+            return Some("the world is still starting".into());
+        }
+        if self.pack_reload.is_some() || self.pending_save.is_some() {
+            return Some("a resource pack reload or a save is running".into());
+        }
+        if self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.level_load.is_active())
+        {
+            return Some("a level is still loading".into());
+        }
+        if self.flight.is_some() || self.world.chunks.is_empty() {
+            return Some("no world is loaded".into());
+        }
+        let (streaming, uploads) = (self.streaming.pending(), self.pending_uploads.len());
+        let backlog = self.remote_backlog();
+        let (light, sections) = (
+            self.world.dirty_light.len(),
+            self.world.dirty_sections.len(),
+        );
+        if streaming != 0 || uploads != 0 || backlog != 0 || light != 0 || sections != 0 {
+            return Some(format!(
+                "the world has work left: streaming {streaming}, uploads {uploads}, backlog {backlog}, dirty light {light}, dirty sections {sections}"
+            ));
+        }
+        if self.lod.is_some() || self.far_terrain_choice().0 > 0 {
+            // Far tiles load and fade in on the wall clock.
+            return Some("far terrain must be off (LOD Distance 0)".into());
+        }
+        if self.settings.chunk_fade != 0.0 || g.shadow_cache {
+            return Some("chunk fade must be 0 and the shadow cache off".into());
+        }
+        if g.taa || g.frame_generation != horizon_client::graphics::FrameGeneration::Off {
+            // Both build on earlier frames the pack's reset doesn't reach.
+            return Some("TAA and frame generation must be off".into());
+        }
+        None
     }
 
     /// What a sequence's frames must share: the world, the camera, the settings, the pack and
@@ -218,9 +244,10 @@ impl Game<'_> {
         match (refusal, self.sequence_scene()) {
             (None, Ok(now)) if now == scene => {}
             (refusal, _) => {
-                let reason = refusal.unwrap_or(
-                    "the camera, world, settings, shader pack or window size changed while it ran",
-                );
+                let reason = refusal.unwrap_or_else(|| {
+                    "the camera, world, settings, shader pack or window size changed while it ran"
+                        .to_owned()
+                });
                 self.end_screenshot_sequence(Err(reason.into()));
                 return self.render_frame();
             }

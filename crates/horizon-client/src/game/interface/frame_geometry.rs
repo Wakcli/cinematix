@@ -198,7 +198,7 @@ impl Game<'_> {
         // replay player's hands remain visible in first person; freecam has
         // no player-view hand.
         if !fov::studio_draws_hand(
-            self.studio.flying(),
+            self.studio.flying() || self.screen == Screen::Cinematix,
             self.ui.hands_drawn(
                 self.spectator(),
                 self.sleeping.is_some(),

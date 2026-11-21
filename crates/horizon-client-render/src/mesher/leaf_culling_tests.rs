@@ -95,6 +95,7 @@ fn mesh(
         translucent_layers: &[],
         leaf_culling: mode,
         hidden_states: &[],
+        overrides: None,
         part_tables: Default::default(),
     };
     mesher.mesh(&region, sy)
@@ -337,6 +338,7 @@ fn a_hidden_state_draws_nothing_and_shows_its_neighbours_face() {
             translucent_layers: &[],
             leaf_culling: LeafCullingMode::Off,
             hidden_states: hidden,
+            overrides: None,
             part_tables: Default::default(),
         };
         mesher.mesh(&around(&chunk), 4).solid.len() / 4

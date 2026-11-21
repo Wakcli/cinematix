@@ -75,19 +75,38 @@ Upstream rules that apply to all Cinematix code: architecture layers
 
 ## 4. Editor activation and editing mode
 
-Activation is a key binding in `horizon-client-input/src/keybinds.rs`, plus an entry where Horizon
-already lists its own screens. Opening pushes the editor screen; closing restores the previous
-screen, cursor capture and input state.
+Implemented in `game/interface/cinematix.rs` on top of `crates/cinematix-editor`.
 
-Editing mode must do exactly four things, and the audit found the hook for each:
+Activation is `key.cinematix` (F8, `horizon-client-input/src/keybinds.rs`, one row in
+`HORIZON_MAPPINGS`), `/cinematix open` in chat, and `horizon-ctl cinematix open`. The gate is the
+same shape as Studio's (`cinematix_screen_opens`): it opens only over `Screen::Playing` with a
+loaded world and a player, answers `true` when already open, and refuses every other screen.
 
-1. **Route input to the editor.** The screen has focus, so gameplay key handling is bypassed as it
-   already is for any open screen.
-2. **Stop gameplay movement.** Suppress the movement path, not the world.
-3. **Keep the editor camera independent.** `StudioFreecam` already holds a detached camera with its
-   own position and angles; the player entity is never moved.
-4. **Control the clock.** Authoring scrubs on a timeline clock; the world tick is frozen or stepped.
-   `HORIZON_STILL` already establishes frozen-world semantics.
+While it is open:
+
+1. **Input is the editor's.** `key_pressed` hands every key to `cinematix_key` before the gameplay
+   mappings; mouse press, release, drag and the wheel are taken by `cinematix_mouse_input`,
+   `cinematix_mouse_dragged` and `cinematix_wheel`; a click can never reach block breaking.
+2. **The world keeps running.** `Screen::Cinematix.is_pause_screen()` is false, as for Studio and
+   the emote wheel. Freezing the world for authoring is a later, deliberate feature.
+3. **The HUD is hidden.** `draw_hud`'s `show_hud` excludes `Screen::Cinematix`, so the hotbar and
+   crosshair do not sit under the viewport.
+4. **Closing restores play.** Escape or F8 calls `close_cinematix_screen`: `Screen::Playing`,
+   `capture(true)`. The `cinematix_editor::Editor` (and so the film) stays in `Game`, not in the
+   screen, so closing and reopening the screen keeps the document.
+
+5. **The film camera is what renders.** While the screen is open, `Game::camera_view`,
+   `Game::camera_orientation` and `Game::fov_degrees` take the pose from
+   `Editor::preview_view`/`preview_fov` (the camera node evaluated at the playhead) before any
+   player or Studio camera. The hand and the hurt/bob camera effects are suppressed through
+   `studio_draws_hand` and `camera_effects_enabled`. On opening, the camera adopts the player's
+   eye and view angles unless its channels already hold keys.
+
+In the editor, W/S/A/D fly horizontally in the camera's own frame, E and Q rise and fall, at
+8 m/s; holding the right mouse button looks around (`Ctrl` slows the look). Moving an unkeyed
+camera writes its rest pose; moving a keyed camera writes a key at the playhead, so an animated
+camera stays animated. `cinematix camera player` (`/cinematix` as well) puts the camera back at
+the player and keys it when the channels are keyed.
 
 The player's position, rotation and camera must survive a full editor session unchanged. That is a
 test, not an intention.
@@ -114,7 +133,7 @@ Node  { id, name, parent, children, rest: Transform, kind, visible, locked }
 NodeKind { Empty | Camera | Light | Actor | Mesh }
 Channel { target: PropPath, keys: Vec<Key>, muted }
 Key     { t: f64, v: Value, interp }
-Interp  { Step | Linear | Smooth | Bezier { out, in_ } }
+Interp  { Step | Linear | Smooth | Spline | Bezier { out, in_ } }
 Value   { F32 | Vec3 | Quat | Color | Bool }
 ```
 
@@ -126,6 +145,12 @@ Design points that survive review:
   the boundary using Horizon's YXZ convention.
 - Keys are sorted; lookup is binary search. Missing channels fall back to rest state; muted channels
   are ignored entirely.
+- A key's `interp` shapes the segment *after* it. `Spline` is the uniform Catmull-Rom Studio's
+  camera track already used: the two neighbouring keys are the tangents, and an end segment
+  extrapolates a virtual neighbour (`p1 - (p2 - p1)` on the first segment, `p2 + (p2 - p1)` on the
+  last), so two keys give a straight line and a third bends it. Positions, scales and colours spline
+  per component; rotations always slerp. New translation keys default to `Spline`; every other
+  property defaults to `Smooth` (`cinematix_editor::default_interp`).
 - `WorldDeltaLayer` is an ordered op list indexed by block position, with an optional activation
   time, so a wall can collapse on the timeline and the save is never touched.
 
@@ -140,6 +165,25 @@ BlockOp { pos, change: Set | Remove | Restore, at: Option<f64> }
 
 O(1) lookup per position; the renderer asks once per chunk rebuild; a dirty set drives remeshes.
 Removing the layer restores the world because the world on disk never changed.
+
+Implemented in `game/interface/cinematix_world.rs` and the mesher:
+
+- `sync_cinematix_world` resolves `WorldDeltaLayer::at(pos, t)` for every op position at the
+  playhead. `Set` becomes the registry's state id, `Remove` becomes air (0), `Restore` and no
+  active op mean "no override". The set is diffed against the previous one; each changed position
+  marks its section and the 26 neighbours dirty (`viewed_worlds::meshing::block_changed`), then
+  the new set goes to `Streaming::set_overrides`.
+- The mesher carries an `Option<&Overrides>` snapshot; `mesh_reusing` writes the entries that fall
+  in its padded 20x20x20 block volume after `Padded::fill`, so faceting, occlusion, fluid and tint
+  reads all see the film's block. The uniform-air fast path is skipped only when an override
+  touches that section. A job with no overrides is byte-for-byte the old path (`None`).
+- During `cinematix render`, a frame whose playhead changes the layer waits two redraws and then
+  for the streaming queues, so the remesh lands before the frame is drawn; a job that cannot settle
+  aborts after 1200 redraws.
+- The client's `World`, the integrated server and the save are never written: only
+  `world.dirty_sections` and the mesher's view change. Gameplay block queries keep the real world.
+- The overlay exists only while the editor screen is open (`close_cinematix_screen` clears it and
+  remeshes back). `cinematix world set|remove|restore|clear|list|status` edits the layer.
 
 ## 8. Rendering and lighting
 
@@ -177,12 +221,30 @@ for frame in range:
 `cinematix-render` already builds the job, sample times and ffmpeg arguments, and covers H.264,
 HEVC, ProRes 422, ProRes 4444 and PNG sequences, with alpha only where the codec carries it.
 
-Two limits found by running the engine, both recorded in [AUDIT.md](AUDIT.md):
+Implemented as `game/interface/cinematix_export.rs` and reachable as
+`cinematix render START END FPS WIDTH HEIGHT PATH`:
 
-- `screenshot-sequence` output is the **surface size**, so arbitrary 1440p/4K needs an explicit
-  offscreen target that is not tied to the window. That is the first real renderer work.
-- The deterministic guards reject a run that has not settled, and can reject the first attempt.
-  A render job must retry the precondition rather than fail.
+- The renderer must be offscreen (`--offscreen`). `Renderer::resize` then retargets the offscreen
+  colour and depth textures, so a frame is drawn at the requested size instead of the window's;
+  a window's surface keeps following the window. The size is restored when the job ends.
+- One frame per redraw: the playhead is set to `frame / fps`, the ordinary frame path draws with the
+  film camera, the readback is saved as `frame_%06d.png`, then the next frame starts. The editor's
+  own UI is not drawn during the job and input is ignored.
+- `PATH` is a directory of PNGs, or a video file: its frames go to `<stem>.frames/` and FFmpeg
+  encodes the finished sequence through `cinematix_render::image_sequence_args` (H.264 here;
+  the crate's codec matrix covers HEVC and ProRes).
+- Preconditions are named: the world must be still (`HORIZON_STILL=1` or `/tick freeze`), loaded
+  with no streaming, uploads, backlog or dirty sections left, chunk fade 0, far terrain off, TAA
+  and frame generation off. The same stillness helper backs `screenshot-sequence`.
+- Control commands other than `quit`, `help`, status reads and `cinematix render cancel` are
+  refused while a job runs, so the world and the film cannot change mid-render.
+
+Limits that remain:
+
+- The readback is synchronous per frame and FFmpeg runs once at the end, so there is no encoder
+  streaming, no resume, and a long 4K job blocks the game thread between frames.
+- `screenshot-sequence` itself still writes the surface size; `cinematix render` is the
+  arbitrary-resolution path.
 
 ## 10. Project format
 
@@ -197,6 +259,13 @@ project.toml      format version, app version, timestamps
 
 JSON for mergeability and because agents must be able to read it. Blobs addressed by content hash
 for dedupe and integrity. `format_version` plus an explicit upcast chain, tested with fixtures.
+
+Implemented in `crates/cinematix-editor/src/film.rs`: `project.toml` (`format_version`, `app`,
+`app_version`, `saved_unix`) and `scene.json` (the `Scene`, every `Channel`). Save/load is reachable
+as `cinematix save [PATH]`, `cinematix load PATH` and `cinematix new`, in chat and through
+`horizon-ctl`. A file from a newer format is refused with its version; a channel whose node or
+property does not exist is refused rather than silently dropped. `assets/` and `thumb.png` are
+reserved in the container and not written yet: there are no assets or renders to put in them.
 
 ## 11. Documentation layout
 

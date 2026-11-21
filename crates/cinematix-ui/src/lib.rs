@@ -43,7 +43,12 @@ pub enum Axis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Dock {
     Leaf(u32),
-    Split { axis: Axis, ratio: f32, a: Box<Dock>, b: Box<Dock> },
+    Split {
+        axis: Axis,
+        ratio: f32,
+        a: Box<Dock>,
+        b: Box<Dock>,
+    },
 }
 
 impl Dock {
@@ -52,7 +57,12 @@ impl Dock {
     }
 
     pub fn split(axis: Axis, ratio: f32, a: Dock, b: Dock) -> Self {
-        Dock::Split { axis, ratio: ratio.clamp(0.05, 0.95), a: Box::new(a), b: Box::new(b) }
+        Dock::Split {
+            axis,
+            ratio: ratio.clamp(0.05, 0.95),
+            a: Box::new(a),
+            b: Box::new(b),
+        }
     }
 
     pub fn layout(&self, area: Rect, out: &mut Vec<(u32, Rect)>) {
@@ -70,8 +80,16 @@ impl Dock {
     }
 
     pub fn set_ratio_at(&mut self, path: &[bool], ratio: f32) {
-        let Some((head, rest)) = path.split_first() else { return };
-        if let Dock::Split { axis: _, ratio: r, a, b } = self {
+        let Some((head, rest)) = path.split_first() else {
+            return;
+        };
+        if let Dock::Split {
+            axis: _,
+            ratio: r,
+            a,
+            b,
+        } = self
+        {
             if rest.is_empty() {
                 *r = ratio.clamp(0.05, 0.95);
             } else if *head {
@@ -120,7 +138,13 @@ pub struct Scrubber {
 
 impl Scrubber {
     pub fn new(value: f64, min: f64, max: f64, step: f64) -> Self {
-        Self { value: value.clamp(min, max), min, max, step, px_per_step: 6.0 }
+        Self {
+            value: value.clamp(min, max),
+            min,
+            max,
+            step,
+            px_per_step: 6.0,
+        }
     }
 
     pub fn drag(&self, dx: f32, mods: Mods) -> f64 {
@@ -173,7 +197,7 @@ impl Default for Tokens {
             row_h: 22.0,
             pad: 6.0,
             gap: 4.0,
-            rail_w: 44.0,
+            rail_w: 30.0,
             header_h: 30.0,
             font_small: 11.0,
             font_body: 13.0,
@@ -197,8 +221,20 @@ mod tests {
     #[test]
     fn modifiers_scale_speed() {
         let s = Scrubber::new(0.0, 0.0, 1000.0, 1.0);
-        let coarse = s.drag(6.0, Mods { shift: true, ..Default::default() });
-        let fine = s.drag(6.0, Mods { ctrl: true, ..Default::default() });
+        let coarse = s.drag(
+            6.0,
+            Mods {
+                shift: true,
+                ..Default::default()
+            },
+        );
+        let fine = s.drag(
+            6.0,
+            Mods {
+                ctrl: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(coarse, 10.0);
         assert!((fine - 0.1).abs() < 1e-9);
     }

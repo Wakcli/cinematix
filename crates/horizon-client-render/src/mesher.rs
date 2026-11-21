@@ -1482,6 +1482,17 @@ const P: usize = 16 + 2 * B as usize;
 fn pi(x: i32, y: i32, z: i32) -> usize {
     ((y + B) as usize * P + (z + B) as usize) * P + (x + B) as usize
 }
+
+/// Writes the overrides that fall in the padded volume into its block cells, so every later read
+/// (faces, occlusion, fluids, tint) sees the film's block instead of the chunk's.
+fn apply_overrides(blocks: &mut [u32], overrides: &Overrides, cx: i32, cz: i32, base_y: i32) {
+    for (&[x, y, z], &state) in overrides.entries() {
+        let (lx, ly, lz) = (x - cx * 16, y - base_y, z - cz * 16);
+        if (-B..16 + B).contains(&lx) && (-B..16 + B).contains(&ly) && (-B..16 + B).contains(&lz) {
+            blocks[pi(lx, ly, lz)] = state;
+        }
+    }
+}
 /// `pi`'s index offset of a step `n`: `pi(p + n) - pi(p)`, so the samples
 /// around a cell are `base + step_index(n)` rather than another `pi`.
 #[inline]
@@ -2181,6 +2192,51 @@ fn pack_rgb([r, g, b]: [u32; 3]) -> u32 {
 fn pack_coords(coords: u32) -> u16 {
     ((coords >> 16 & 0xFF) | (coords & 0xFF) << 8) as u16
 }
+/// Active film overrides for the mesher: world position to block state id. Only positions the
+/// world layer resolves to a block are here (`Remove` is air, state 0); a `Restore` is absent, so
+/// the world's own block draws. The layer is the game's; the mesher only reads this snapshot.
+#[derive(Debug, Default, Clone)]
+pub struct Overrides {
+    blocks: std::collections::HashMap<[i32; 3], u32>,
+}
+
+impl Overrides {
+    pub fn new(blocks: impl IntoIterator<Item = ([i32; 3], u32)>) -> Self {
+        Self {
+            blocks: blocks.into_iter().collect(),
+        }
+    }
+
+    pub fn insert(&mut self, pos: [i32; 3], state: u32) {
+        self.blocks.insert(pos, state);
+    }
+
+    pub fn get(&self, pos: [i32; 3]) -> Option<u32> {
+        self.blocks.get(&pos).copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&[i32; 3], &u32)> {
+        self.blocks.iter()
+    }
+
+    /// Whether any override lies in the padded volume around section `sy` of chunk `(cx, cz)`.
+    pub(crate) fn touches(&self, cx: i32, cz: i32, base_y: i32) -> bool {
+        self.blocks.keys().any(|[x, y, z]| {
+            (-B..16 + B).contains(&(x - cx * 16))
+                && (-B..16 + B).contains(&(y - base_y))
+                && (-B..16 + B).contains(&(z - cz * 16))
+        })
+    }
+}
+
 pub struct Mesher<'a> {
     /// CardinalLighting.NETHER: brighter up/down faces.
     pub nether_shading: bool,
@@ -2222,6 +2278,9 @@ pub struct Mesher<'a> {
     /// The answers of the client `BlockPart` methods the fluid mesher reads; empty tables when
     /// no part subscribes.
     pub part_tables: &'a part_tables::PartTables,
+    /// The film's active block overrides, applied to the padded block volume before the mesher
+    /// reads it; `None` when the film has none (the usual case, and the only zero-cost one).
+    pub overrides: Option<&'a Overrides>,
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -2247,7 +2306,10 @@ impl Mesher<'_> {
         let center = region[1][1].expect("centre chunk");
         let section = &center.sections[sy as usize];
         let base_y = center.min_y() + sy * 16;
-        if section.is_uniform(0) {
+        let overrides_here = self
+            .overrides
+            .is_some_and(|o| o.touches(center.x, center.z, base_y));
+        if section.is_uniform(0) && !overrides_here {
             if !self.tables.section_geometry.is_empty() {
                 let mut tints = Tints::new(
                     region,
@@ -2263,6 +2325,15 @@ impl Mesher<'_> {
         }
         let own = scratch.own.get_or_insert_with(|| Box::new([0; 4096]));
         scratch.padded.fill(region, sy, own);
+        if let Some(overrides) = self.overrides {
+            apply_overrides(
+                &mut scratch.padded.blocks,
+                overrides,
+                center.x,
+                center.z,
+                base_y,
+            );
+        }
         if !self.hidden_states.is_empty() {
             for id in &mut scratch.padded.blocks {
                 if self.hidden_states[*id as usize] {
@@ -3033,5 +3104,35 @@ mod quarter_tests {
         assert_eq!(standard_uv(D::North, [1.0, 1.0, 0.0]), [0.0, 0.0]);
         assert_eq!(standard_uv(D::East, [1.0, 0.0, 1.0]), [0.0, 1.0]);
         assert_eq!(standard_uv(D::Down, [0.0, 0.0, 1.0]), [0.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+
+    #[test]
+    fn an_override_lands_in_its_padded_cell() {
+        let overrides = Overrides::new([([0, 64, 0], 7)]);
+        let mut blocks = vec![0u32; P * P * P];
+        apply_overrides(&mut blocks, &overrides, 0, 0, 64);
+        assert_eq!(blocks[pi(0, 0, 0)], 7);
+        let mut other = vec![0u32; P * P * P];
+        apply_overrides(&mut other, &overrides, 1, 0, 64);
+        assert!(other.iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn touching_a_section_reaches_two_blocks_of_its_border() {
+        let inside = Overrides::new([([-2, 64, 0], 1)]);
+        assert!(inside.touches(0, 0, 64));
+        let outside = Overrides::new([([-3, 64, 0], 1)]);
+        assert!(!outside.touches(0, 0, 64));
+        let top = Overrides::new([([0, 64 + 17, 0], 1)]);
+        assert!(top.touches(0, 0, 64));
+        let above = Overrides::new([([0, 64 + 18, 0], 1)]);
+        assert!(!above.touches(0, 0, 64));
+        let below = Overrides::new([([0, 64 - 3, 0], 1)]);
+        assert!(!below.touches(0, 0, 64));
     }
 }

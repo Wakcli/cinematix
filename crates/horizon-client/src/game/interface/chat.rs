@@ -152,6 +152,109 @@ fn with_studio_commands(base: &Dispatcher) -> Dispatcher {
     d
 }
 
+/// Add `/cinematix`'s local grammar to the suggestion tree. Commands are
+/// still dispatched by `cinematix_command`; this tree supplies coloring,
+/// completion and Tab acceptance in chat.
+fn with_cinematix_commands(base: &Dispatcher) -> Dispatcher {
+    fn literal(d: &mut Dispatcher, parent: usize, name: &str) -> usize {
+        let node = d.literal(parent, name);
+        d.executes(node, MOD_COMMAND);
+        node
+    }
+    fn argument(d: &mut Dispatcher, parent: usize, name: &str, ty: ArgType) -> usize {
+        let node = d.argument(parent, name, ty);
+        d.executes(node, MOD_COMMAND);
+        node
+    }
+
+    let mut d = base.clone();
+    let root = d.find("cinematix").unwrap_or_else(|| d.literal(0, "cinematix"));
+    d.executes(root, MOD_COMMAND);
+
+    literal(&mut d, root, "open");
+    literal(&mut d, root, "close");
+    literal(&mut d, root, "status");
+    literal(&mut d, root, "play");
+    literal(&mut d, root, "pause");
+    literal(&mut d, root, "key");
+    literal(&mut d, root, "delkey");
+    literal(&mut d, root, "fit");
+    let frame = literal(&mut d, root, "frame");
+    argument(
+        &mut d,
+        frame,
+        "frame",
+        ArgType::Integer {
+            min: 0,
+            max: i32::MAX,
+        },
+    );
+    let seek = literal(&mut d, root, "seek");
+    argument(
+        &mut d,
+        seek,
+        "seconds",
+        ArgType::Double {
+            min: 0.0,
+            max: 86_400.0,
+        },
+    );
+    let render = literal(&mut d, root, "render");
+    argument(&mut d, render, "args", ArgType::Greedy);
+    let save = literal(&mut d, root, "save");
+    argument(&mut d, save, "path", ArgType::Greedy);
+    let load = literal(&mut d, root, "load");
+    argument(&mut d, load, "path", ArgType::Greedy);
+    literal(&mut d, root, "new");
+    literal(&mut d, root, "undo");
+    literal(&mut d, root, "redo");
+    let camera = literal(&mut d, root, "camera");
+    literal(&mut d, camera, "player");
+    let pose = literal(&mut d, camera, "pose");
+    argument(&mut d, pose, "values", ArgType::Greedy);
+    let world = literal(&mut d, root, "world");
+    argument(&mut d, world, "args", ArgType::Greedy);
+    let env = literal(&mut d, root, "env");
+    argument(&mut d, env, "args", ArgType::Greedy);
+    let meta = literal(&mut d, root, "meta");
+    argument(&mut d, meta, "args", ArgType::Greedy);
+    let preview = literal(&mut d, root, "preview");
+    argument(&mut d, preview, "args", ArgType::Greedy);
+    let channel = literal(&mut d, root, "channel");
+    argument(
+        &mut d,
+        channel,
+        "channel",
+        ArgType::StrEnum(
+            &["position", "rotation", "fov", "focus", "aperture"],
+            "argument.enum.invalid",
+        ),
+    );
+    let interp = literal(&mut d, root, "interp");
+    argument(
+        &mut d,
+        interp,
+        "mode",
+        ArgType::StrEnum(
+            &["step", "linear", "smooth", "spline", "bezier"],
+            "argument.enum.invalid",
+        ),
+    );
+    let section = literal(&mut d, root, "section");
+    argument(
+        &mut d,
+        section,
+        "section",
+        ArgType::StrEnum(
+            &[
+                "camera", "actors", "models", "lights", "world", "film", "render", "project",
+            ],
+            "argument.enum.invalid",
+        ),
+    );
+    d
+}
+
 impl Game<'_> {
     /// The tree the chat box colours, completes and parses with for the
     /// world's connection: `base`, the tree the server sent, or the game's own
@@ -193,7 +296,11 @@ impl Game<'_> {
             horizon_client::command::MOD_COMMAND,
             &arguments,
         );
-        with_studio_commands(&with_native_commands(&tree_with_mods, &["studio"])).with_profiler()
+        with_studio_commands(&with_cinematix_commands(&with_native_commands(
+            &tree_with_mods,
+            &["studio", "cinematix"],
+        )))
+        .with_profiler()
     }
 }
 

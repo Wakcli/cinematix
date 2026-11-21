@@ -9003,6 +9003,9 @@ impl Game<'_> {
             if self.studio_command(command) {
                 return;
             }
+            if self.cinematix_command(command) {
+                return;
+            }
             self.send_command(command);
         } else {
             self.send_signed_chat(message);

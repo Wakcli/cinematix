@@ -289,6 +289,7 @@ struct MeshSettings {
     opaque_ice: bool,
     translucent_layers: Arc<[bool]>,
     leaf_culling: LeafCullingMode,
+    overrides: Option<Arc<crate::mesher::Overrides>>,
 }
 enum Job {
     Generate(i32, i32),
@@ -648,6 +649,8 @@ pub struct Streaming {
     pub translucent_layers: Arc<[bool]>,
     /// What the mesher does with leaf faces inside a canopy (`LeafCullingMode`).
     pub leaf_culling: LeafCullingMode,
+    /// The film's active block overrides, handed to every mesh job; `None` for none.
+    pub overrides: Option<Arc<crate::mesher::Overrides>>,
     /// Incremental relighting of block edits on lit chunks (see `light::relight`).
     light_tables: Arc<LightTables>,
     /// Applied edits by sequence, replayed onto light jobs snapshotted before them.
@@ -1148,6 +1151,12 @@ pub use viewed_meshing::{
     ViewedLevel, ViewedMeshing,
 };
 impl Streaming {
+    /// The film's active overrides for future mesh jobs. Sections already meshed keep their
+    /// geometry until the caller marks them dirty, which the game does by diffing the layer.
+    pub fn set_overrides(&mut self, overrides: Option<Arc<crate::mesher::Overrides>>) {
+        self.overrides = overrides;
+    }
+
     pub fn new<G: ChunkGenerator>(
         generator: Arc<G>,
         context: Arc<WorkerContext>,
@@ -1247,6 +1256,7 @@ impl Streaming {
             opaque_ice: false,
             translucent_layers: Arc::from([]),
             leaf_culling: LeafCullingMode::Off,
+            overrides: None,
             light_tables,
             light_log: Vec::new(),
             light_edit_sequence: 0,

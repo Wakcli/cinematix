@@ -55,7 +55,7 @@ pub(super) fn column_changed(world: &mut World, (x, z): (i32, i32)) {
 
 /// The block at `pos` changed: the sections its neighbourhood reaches remesh
 /// (`LevelRenderer.setBlocksDirty` from one block below to one above it on each axis).
-pub(super) fn block_changed(world: &mut World, [x, y, z]: [i32; 3]) {
+pub(in crate::game) fn block_changed(world: &mut World, [x, y, z]: [i32; 3]) {
     let Some(min_y) = world.chunks.get(&(x >> 4, z >> 4)).map(|c| c.min_y()) else {
         return;
     };

@@ -146,7 +146,7 @@ impl Playhead {
     }
 
     pub fn seek_frame(&mut self, f: i64) {
-        self.t = (f.max(0) as f64 / self.fps as f64);
+        self.t = f.max(0) as f64 / self.fps as f64;
     }
 
     pub fn quantise(&mut self) {

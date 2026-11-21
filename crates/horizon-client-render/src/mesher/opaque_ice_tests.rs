@@ -73,6 +73,7 @@ fn mesh(f: &Fixture, chunk: &Chunk, opaque_ice: bool) -> SectionMesh {
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
         hidden_states: &[],
+        overrides: None,
         part_tables: Default::default(),
     };
     mesher.mesh(&region, 0)

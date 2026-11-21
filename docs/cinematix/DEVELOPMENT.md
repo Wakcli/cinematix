@@ -88,6 +88,55 @@ xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
 `game/ui_control.rs` lets `horizon-ctl` reach registered controls by name, which is possible only
 for controls drawn with a registering helper.
 
+## The editor, headless
+
+The editor is a screen inside the running game; this is the whole loop that opens it, proves it
+drew, and closes it again, with no display:
+
+```sh
+xvfb-run -a -s "-screen 0 1920x1080x24" bash -c '
+  CTL=./target/fast/horizon-ctl
+  SOCK=/tmp/opencode/cinematix.sock
+  RES=/home/wak/Cinematix/horizon/.local/horizon-client/26.3
+  $CTL --socket $SOCK launch --world CinematixScratch --seed 7 --offscreen --wait --resources $RES
+  $CTL --socket $SOCK wait-ready 90
+  $CTL --socket $SOCK key f8 tap                 # key.cinematix: the editor opens
+  $CTL --socket $SOCK cinematix status           # open: true, screen: cinematix
+  $CTL --socket $SOCK cinematix frame 48         # playhead at frame 48 (2.00 s at 24 fps)
+  $CTL --socket $SOCK cinematix key              # one key on the selected channel
+  $CTL --socket $SOCK key w down                 # fly the film camera forward (E/Q rise/fall)
+  sleep 1
+  $CTL --socket $SOCK key w up
+  $CTL --socket $SOCK set field-of-view 0.5      # registered slider: the view widens to 90
+  $CTL --socket $SOCK cinematix camera player    # back to the player's eye
+  $CTL --socket $SOCK cinematix save /tmp/film.cmx
+  $CTL --socket $SOCK cinematix new              # empty film, camera at the player
+  $CTL --socket $SOCK cinematix load /tmp/film.cmx
+  $CTL --socket $SOCK cinematix world set 0 120 5 minecraft:gold_block 1.0
+  $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film-frames
+  $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film-frames
+  $CTL --socket $SOCK cinematix render 0 24 24 1920 1080 /tmp/film.mp4
+  $CTL --socket $SOCK ui                         # the rail buttons and the FOV sliders, by id
+  $CTL --socket $SOCK screenshot /tmp/editor.png
+  $CTL --socket $SOCK key escape tap             # back to Playing
+  $CTL --socket $SOCK cinematix status           # open: false, screen: playing
+  $CTL --socket $SOCK quit
+'
+```
+
+A film's world overrides are client-side: `cinematix world set|remove|restore|clear|list|status`
+edits the layer, the playhead activates ops, and the mesher remeshes the changed sections. Nothing
+is written to the world or the save; closing the editor clears the overlay.
+
+Rendering needs the world still and the renderer offscreen: launch with `HORIZON_STILL=1`, pass
+`--offscreen`, and set `options-set chunkSectionFadeInTime 0`. `cinematix render` refuses with the
+named cause while anything is left to load, and `cinematix render cancel` aborts.
+
+The same commands exist in chat as `/cinematix open|close|status|play|pause|frame N|seek S|key|
+delkey|fit|section NAME|render ...`. `cinematix` is not `screenshot-sequence`: that command refuses any screen
+but `Playing`, so `screenshot` is the capture path while the editor is open. The screenshot is the
+surface size, not a requested resolution.
+
 ## Deterministic capture
 
 ```sh

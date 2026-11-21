@@ -269,6 +269,9 @@ enum Screen {
     /// Horizon Studio script screen (`studio_screen_open`): canvas draws
     /// itself, takes input through the screen hooks, does not draw chat.
     Studio,
+    /// Cinematix's editor (game/interface/cinematix.rs): the film's camera,
+    /// lights and timeline, drawn over the world it keeps framing.
+    Cinematix,
 }
 impl Screen {
     /// The id native mods see for this screen (`ScreenView.id`, the
@@ -300,6 +303,7 @@ impl Screen {
             Screen::Mod => "mod",
             Screen::HudEditor => "hud_editor",
             Screen::Studio => "studio",
+            Screen::Cinematix => "cinematix",
         }
     }
 }
@@ -1760,6 +1764,20 @@ struct Game<'a> {
     /// Replay playback (game/replay.rs), and Horizon Studio's editor on it (game/studio.rs).
     pub(super) replay: replay::Replay,
     pub(super) studio: studio::Studio,
+    /// Cinematix's film document and editor state (game/interface/cinematix.rs).
+    pub(super) cinematix: cinematix_editor::Editor,
+    /// The pointer position the editor's right-button look last saw, while it is held.
+    cinematix_bend: Option<BendDrag>,
+    pub(super) cinematix_look: Option<(f32, f32)>,
+    /// A running `cinematix render` (game/interface/cinematix_export.rs).
+    pub(super) cinematix_export: Option<cinematix_export::Render>,
+    /// The film's world layer resolved at the playhead, as the mesher draws it
+    /// (game/interface/cinematix_world.rs).
+    pub(super) cinematix_world: cinematix_world::Applied,
+    /// The playhead time `cinematix_world` was resolved at.
+    pub(super) cinematix_world_time: Option<f64>,
+    /// The editor revision the overlay was last resolved from.
+    pub(super) cinematix_world_revision: Option<u64>,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
@@ -4774,7 +4792,10 @@ impl Game<'_> {
             self.native_render_gui_pre(&mut gui_canceled);
         }
         // RenderGuiEvent.Pre: a mod's cancel hides the HUD as F1 does.
-        let show_hud = !self.ui.hide_gui && !gui_canceled && !self.replay.playing();
+        let show_hud = !self.ui.hide_gui
+            && !gui_canceled
+            && !self.replay.playing()
+            && self.screen != Screen::Cinematix;
         // Hud.extractRenderState asks `Screen.isInGameUi` twice: such a screen
         // defers the subtitles over itself, and keeps them while F1 hides the
         // rest of the HUD.
@@ -5111,6 +5132,12 @@ impl Game<'_> {
                     horizon_client::screen_draw::RenderPhase::Foreground,
                 );
             }
+            Screen::Cinematix => {
+                // A render draws the film, not the editor around it.
+                if self.cinematix_export.is_none() {
+                    self.draw_cinematix(&mut batch);
+                }
+            }
             Screen::Inventory => {
                 let from = batch.vertices.len();
                 self.draw_inventory(&mut batch);
@@ -5190,6 +5217,11 @@ impl Game<'_> {
     /// `Camera.setRotation`: the camera's orientation, turned round in
     /// third-person front view.
     pub(super) fn camera_orientation(&self) -> glam::Quat {
+        if self.screen == Screen::Cinematix
+            && let Some((_, yaw, pitch)) = self.cinematix.preview_view()
+        {
+            return camera_rotation(horizon_client::camera::CameraType::FirstPerson, yaw, pitch);
+        }
         if self.studio.flying() {
             return camera_rotation(
                 horizon_client::camera::CameraType::FirstPerson,
@@ -7839,6 +7871,9 @@ impl Game<'_> {
         self.world.modified = modified;
     }
     fn render(&mut self) -> Result<bool> {
+        if self.cinematix_export.is_some() {
+            return self.render_cinematix_frame();
+        }
         if self.screenshot_sequence.is_some() {
             return self.render_sequence_frame();
         }
@@ -8192,6 +8227,20 @@ impl Game<'_> {
             post_blend: Some(&post_blend),
             post_biome: Some(post_of(biome)),
         });
+        if let Some(env) = self.cinematix_environment() {
+            if let Some(v) = env.fog_start {
+                sky.fog_start = v;
+            }
+            if let Some(v) = env.fog_end {
+                sky.fog_end = v;
+            }
+            if let Some(v) = env.sky_color {
+                sky.sky_color = v;
+            }
+            if let Some(v) = env.fog_color {
+                sky.fog_color = v;
+            }
+        }
         self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 && !self.settings.file.bool("hideLightningFlashes") {
             // ClientLevel's flash layer while skyFlashTime > 0: the sky colour
@@ -8207,6 +8256,7 @@ impl Game<'_> {
         let mut lines = self.fishing_line(alpha, size);
         let mut g = self.debug_gizmos(alpha as f32, camera.to_array());
         self.studio_camera_path(&mut g);
+        self.cinematix_camera_path(&mut g);
         lines.extend(g.lines);
         let on_top = g.on_top;
         pr.lap("pr_debug");
@@ -8349,7 +8399,10 @@ impl Game<'_> {
         } else {
             self.fov_degrees(camera_alpha as f32, camera.to_array())
         };
-        let camera_effects = fov::camera_effects_enabled(title, self.studio.flying());
+        let camera_effects = fov::camera_effects_enabled(
+            title,
+            self.studio.flying() || self.screen == Screen::Cinematix,
+        );
         let bob = if !camera_effects {
             glam::Mat4::IDENTITY
         } else {
@@ -8559,7 +8612,12 @@ impl Game<'_> {
         pack_inputs.frame_timing = self
             .screenshot_sequence
             .as_ref()
-            .map(screenshot_sequence::Sequence::timing);
+            .map(screenshot_sequence::Sequence::timing)
+            .or_else(|| {
+                self.cinematix_export
+                    .as_ref()
+                    .map(cinematix_export::Render::timing)
+            });
         pr.lap("pr_shader_inputs");
         // Fog hooks may clear particles too. They must run before the final clear
         // boundary, not while constructing Frame after geometry has been extracted.
@@ -9277,6 +9335,9 @@ impl Game<'_> {
                         );
                         let previous = self.cursor;
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
+                        if self.cinematix_mouse_dragged() {
+                            return Ok(());
+                        }
                         if self.studio_mouse_dragged(b.width) {
                             return Ok(());
                         }
@@ -9347,6 +9408,10 @@ impl Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
+                    if self.screen == Screen::Cinematix {
+                        self.cinematix_wheel(d, self.modifiers.control_key());
+                        return Ok(());
+                    }
                     // ScreenEvent.MouseScrolled.Pre: the open screen hears of
                     // the wheel before anything scrolls, and a cancelled turn
                     // scrolls nothing — no bundle, no list, slider or
@@ -9600,6 +9665,9 @@ impl Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    if self.cinematix_mouse_input(pressed, button) {
+                        return Ok(());
+                    }
                     if self.studio_mouse_input(pressed, button) {
                         return Ok(());
                     }
@@ -10090,6 +10158,7 @@ impl Game<'_> {
                     self.previous = now;
                     self.upload_pace.frame(elapsed);
                     self.studio_fly(elapsed);
+                    self.cinematix_tick(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
                     // other screens use the same keys for their own navigation.
                     if self.screen == Screen::Playing
@@ -10888,6 +10957,13 @@ impl<'a> Game<'a> {
             realm_session: false,
             replay: Default::default(),
             studio: Default::default(),
+            cinematix: Default::default(),
+            cinematix_bend: None,
+            cinematix_look: None,
+            cinematix_export: None,
+            cinematix_world: Default::default(),
+            cinematix_world_time: None,
+            cinematix_world_revision: None,
             lan: None,
             integrated: None,
             level_shapes: Default::default(),
@@ -11579,4 +11655,13 @@ fn block_entity_reach(resources: &Resources) -> Arc<[u8]> {
                 .collect()
         })
         .clone()
+}
+
+struct BendDrag {
+    segment: (f64, f64),
+    cursor: (f32, f32),
+    midpoint: glam::Vec3,
+    right: glam::Vec3,
+    up: glam::Vec3,
+    units_per_pixel: f32,
 }

@@ -13,7 +13,7 @@
 //! set of its own (`meshing`); nothing of a viewed level is drawn yet: drawing is gap 13's world
 //! view. Its entities live in its world (`entities`), apart from the player's own.
 mod entities;
-mod meshing;
+pub(in crate::game) mod meshing;
 mod routing;
 mod sounds;
 mod switch;

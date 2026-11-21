@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="470" viewBox="0 0 320 470">
+  <defs>
+    <style>
+      .lbl { font-family: monospace; font-size: 12px; fill: #8b949e; }
+      .val { font-family: monospace; font-size: 12px; fill: #f0f6fc; font-weight: bold; }
+      .sub { font-family: monospace; font-size: 10px; fill: #6e7681; }
+      .cat { font-family: monospace; font-size: 11px; fill: #58a6ff; }
+    </style>
+    <linearGradient id="skyTrack" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#161b26" />
+      <stop offset="25%" stop-color="#5c4128" />
+      <stop offset="50%" stop-color="#2b4c6f" />
+      <stop offset="75%" stop-color="#5e3a29" />
+      <stop offset="100%" stop-color="#161b26" />
+    </linearGradient>
+  </defs>
+
+  <rect width="320" height="470" fill="#141619" />
+
+  <!-- 1. Bounded Fill Bar -->
+  <text x="12" y="18" class="cat">01 // BOUNDED FILL BAR</text>
+  <g transform="translate(12, 24)">
+    <rect width="272" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="1" y="1" width="190" height="22" fill="#233142" />
+    <text x="8" y="16" class="lbl">Field of view</text>
+    <text x="264" y="16" text-anchor="end" class="val">70°</text>
+    <polygon points="290,8 294,12 290,16 286,12" fill="#58a6ff" />
+  </g>
+
+  <!-- 2. Bipolar Center-Zero Bar -->
+  <text x="12" y="66" class="cat">02 // BIPOLAR CENTER-ZERO</text>
+  <g transform="translate(12, 72)">
+    <rect width="272" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="136" y="1" width="54" height="22" fill="#233142" />
+    <rect x="136" y="1" width="1" height="22" fill="#484f58" />
+    <text x="8" y="16" class="lbl">Exposure</text>
+    <text x="264" y="16" text-anchor="end" class="val">+0.40</text>
+    <polygon points="290,8 294,12 290,16 286,12" fill="none" stroke="#57606a" stroke-width="1.5" />
+  </g>
+
+  <!-- 3. Drag-Number Box -->
+  <text x="12" y="114" class="cat">03 // DRAG-NUMBER BOX</text>
+  <g transform="translate(12, 120)">
+    <rect width="272" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <text x="8" y="16" class="lbl">Focus distance</text>
+    <text x="264" y="16" text-anchor="end" class="val">8.0 m</text>
+    <polygon points="290,8 294,12 290,16 286,12" fill="#58a6ff" />
+  </g>
+
+  <!-- 4. 3-Axis Vector Row -->
+  <text x="12" y="162" class="cat">04 // 3-AXIS VECTOR (XYZ)</text>
+  <g transform="translate(12, 168)">
+    <rect x="0" y="0" width="88" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="1" y="1" width="2" height="22" fill="#da3633" />
+    <text x="8" y="16" class="sub">X</text>
+    <text x="82" y="16" text-anchor="end" class="val">142.5</text>
+
+    <rect x="92" y="0" width="88" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="93" y="1" width="2" height="22" fill="#2ea043" />
+    <text x="100" y="16" class="sub">Y</text>
+    <text x="174" y="16" text-anchor="end" class="val">78.0</text>
+
+    <rect x="184" y="0" width="88" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="185" y="1" width="2" height="22" fill="#388bfd" />
+    <text x="192" y="16" class="sub">Z</text>
+    <text x="266" y="16" text-anchor="end" class="val">-410.2</text>
+
+    <polygon points="290,8 294,12 290,16 286,12" fill="#58a6ff" />
+  </g>
+
+  <!-- 5. Linked Dimension Pair -->
+  <text x="12" y="210" class="cat">05 // LINKED DIMENSION PAIR</text>
+  <g transform="translate(12, 216)">
+    <rect x="0" y="0" width="124" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <text x="8" y="16" class="lbl">W</text>
+    <text x="116" y="16" text-anchor="end" class="val">1920</text>
+
+    <rect x="128" y="4" width="16" height="16" fill="#21262d" stroke="#30363d" stroke-width="1" />
+    <rect x="133" y="9" width="6" height="6" fill="none" stroke="#58a6ff" stroke-width="1.5" />
+
+    <rect x="148" y="0" width="124" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <text x="156" y="16" class="lbl">H</text>
+    <text x="264" y="16" text-anchor="end" class="val">1428</text>
+  </g>
+
+  <!-- 6. Stepped Preset Selector -->
+  <text x="12" y="258" class="cat">06 // STEPPED PRESETS</text>
+  <g transform="translate(12, 264)">
+    <text x="0" y="16" class="lbl">FPS</text>
+    <rect x="72" y="0" width="48" height="24" fill="#233142" stroke="#58a6ff" stroke-width="1" />
+    <text x="96" y="16" text-anchor="middle" class="val">24</text>
+
+    <rect x="122" y="0" width="48" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <text x="146" y="16" text-anchor="middle" class="lbl">30</text>
+
+    <rect x="172" y="0" width="48" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <text x="196" y="16" text-anchor="middle" class="lbl">60</text>
+
+    <rect x="222" y="0" width="50" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <text x="247" y="16" text-anchor="middle" class="lbl">120</text>
+  </g>
+
+  <!-- 7. Dual-Handle Range Track -->
+  <text x="12" y="306" class="cat">07 // DUAL-HANDLE CLIP RANGE</text>
+  <g transform="translate(12, 312)">
+    <rect width="272" height="12" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="24" y="1" width="180" height="10" fill="#263547" />
+    <rect x="22" y="-1" width="4" height="14" fill="#8b949e" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="202" y="-1" width="4" height="14" fill="#8b949e" stroke="#0b0c0e" stroke-width="1" />
+    <polygon points="290,2 294,6 290,10 286,6" fill="#58a6ff" />
+  </g>
+
+  <!-- 8. Cycle / Time Gradient Track -->
+  <text x="12" y="344" class="cat">08 // CYCLE / TIME TRACK</text>
+  <g transform="translate(12, 350)">
+    <rect width="272" height="12" fill="url(#skyTrack)" stroke="#0b0c0e" stroke-width="1" />
+    <rect x="98" y="-2" width="2" height="16" fill="#f0f6fc" />
+    <polygon points="290,2 294,6 290,10 286,6" fill="#58a6ff" />
+  </g>
+
+  <!-- 9. Color Swatch + Hex -->
+  <text x="12" y="382" class="cat">09 // COLOR SWATCH + HEX</text>
+  <g transform="translate(12, 388)">
+    <rect width="272" height="24" fill="#1b1f24" stroke="#0b0c0e" stroke-width="1" />
+    <text x="8" y="16" class="lbl">Fog Tint</text>
+    <rect x="184" y="4" width="16" height="16" fill="#6b8fb3" stroke="#0b0c0e" stroke-width="1" />
+    <text x="264" y="16" text-anchor="end" class="val">#6B8FB3</text>
+    <polygon points="290,8 294,12 290,16 286,12" fill="none" stroke="#57606a" stroke-width="1.5" />
+  </g>
+
+  <!-- 10. Toggles & Keyframe Rail States -->
+  <text x="12" y="430" class="cat">10 // CHECKBOX & KEYFRAME STATES</text>
+  <g transform="translate(12, 436)">
+    <!-- Checked -->
+    <rect x="0" y="2" width="16" height="16" fill="#233142" stroke="#58a6ff" stroke-width="1" />
+    <rect x="4" y="6" width="8" height="8" fill="#58a6ff" />
+    <text x="24" y="14" class="val">DOF</text>
+
+    <!-- Unchecked -->
+    <rect x="70" y="2" width="16" height="16" fill="#1b1f24" stroke="#30363d" stroke-width="1" />
+    <text x="94" y="14" class="lbl">Motion Blur</text>
+
+    <!-- Keyframe States: Unkeyed / Keyed / Animated -->
+    <polygon points="220,6 224,10 220,14 216,10" fill="none" stroke="#57606a" stroke-width="1.5" />
+    <polygon points="244,6 248,10 244,14 240,10" fill="#58a6ff" />
+    <polygon points="268,6 272,10 268,14 264,10" fill="#264f78" stroke="#58a6ff" stroke-width="1" />
+  </g>
+</svg>

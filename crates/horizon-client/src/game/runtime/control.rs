@@ -380,6 +380,7 @@ impl Game<'_> {
     ) -> Result<Option<Value>> {
         let words: Vec<&str> = line.split_whitespace().collect();
         self.screenshot_sequence_gate(words.first().copied())?;
+        self.cinematix_render_gate(&words)?;
         if words.first() == Some(&"screenshot-sequence") {
             return self.screenshot_sequence_command(line, reply);
         }
@@ -434,6 +435,13 @@ impl Game<'_> {
         if let Some(value) = self.studio_control(&words)? {
             return Ok(Some(value));
         }
+        if words.first().copied() == Some("cinematix") {
+            // A deferred reply (a render) sends its own answer when the last frame is written.
+            return match self.cinematix_control(&words[1..], Some(reply))? {
+                Some(value) => Ok(Some(value)),
+                None => Ok(None),
+            };
+        }
         match self.agent_command(&words, line, reply, event_loop)? {
             super::agent::Handled::Reply(value) => return Ok(Some(value)),
             super::agent::Handled::Deferred => return Ok(None),
@@ -457,6 +465,7 @@ impl Game<'_> {
                 .chain(super::input_trace::HELP)
                 .chain(super::repro::HELP)
                 .chain(super::studio::HELP)
+                .chain(super::cinematix::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "section-draws" => {
@@ -1461,6 +1470,7 @@ impl Game<'_> {
             Screen::Mod => "mod",
             Screen::HudEditor => "hud-editor",
             Screen::Studio => "studio",
+            Screen::Cinematix => "cinematix",
             Screen::EmoteWheel => "emote-wheel",
         }
     }
@@ -1819,6 +1829,10 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "f4" => KeyCode::F4,
         "f5" => KeyCode::F5,
         "f6" => KeyCode::F6,
+        "f7" => KeyCode::F7,
+        "f8" => KeyCode::F8,
+        "f9" => KeyCode::F9,
+        "f10" => KeyCode::F10,
         "f11" => KeyCode::F11,
         "slash" | "/" => KeyCode::Slash,
         "backspace" => KeyCode::Backspace,

@@ -41,6 +41,7 @@ fn mesh_for(
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
         hidden_states: &[],
+        overrides: None,
         part_tables: Default::default(),
     };
     let mut mesh = mesher.mesh(&region, 0);
@@ -404,6 +405,7 @@ pub(crate) fn meshed(
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
         hidden_states: &[],
+        overrides: None,
         part_tables: Default::default(),
     };
     let mut mesh = mesher.mesh(&region, 0);

@@ -262,6 +262,7 @@ impl World {
             translucent_layers: &[],
             leaf_culling: LeafCullingMode::Off,
             hidden_states: &[],
+            overrides: None,
             part_tables: Default::default(),
         }
     }
@@ -360,4 +361,28 @@ fn a_refused_contribution_adds_nothing_and_the_built_in_cube_keeps_six_faces() {
     assert_eq!(quads(&baseline.solid), 6);
     assert!(baseline.translucent.is_empty());
     assert!(world.mesher(&none).mesh(&region, 1).solid.is_empty());
+}
+
+#[test]
+fn an_override_draws_a_block_in_an_empty_section() {
+    let Some(world) = World::load() else {
+        return;
+    };
+    let tables = world.tables(Vec::new());
+    let mut mesher = world.mesher(&tables);
+    let stone = world
+        .assets
+        .registry
+        .default_state("minecraft:stone")
+        .unwrap();
+    let overrides = Overrides::new([([2, MIN_Y + 4, 2], stone.0)]);
+    mesher.overrides = Some(&overrides);
+    let chunk = Chunk::empty(0, 0);
+    let region = [[Some(&chunk); 3]; 3];
+    let mesh = mesher.mesh(&region, 0);
+    assert_eq!(
+        mesh.solid.len() / 4,
+        6,
+        "a lone stone block shows six faces"
+    );
 }
