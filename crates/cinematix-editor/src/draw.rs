@@ -188,6 +188,16 @@ fn icon_button(
 
 pub fn draw(ed: &Editor, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
     let f = ed.frame();
+    if ed.framing_guides {
+        let r = f.viewport;
+        let start = batch.vertices.len();
+        let ink = rgba(255, 255, 255, 95);
+        for fraction in [1.0 / 3.0, 2.0 / 3.0] {
+            batch.fill(atlas, f.size.0 * fraction, 0.0, 1.0, f.size.1, ink);
+            batch.fill(atlas, 0.0, f.size.1 * fraction, f.size.0, 1.0, ink);
+        }
+        batch.clip_since(start, r.x, r.y, r.x + r.w, r.y + r.h);
+    }
     if ed.bend_segment().is_some() {
         let label = Text::translate("cinematix.viewport.frame_curve", &[]);
         let w = HudBatch::text_width(atlas, &label.plain());
@@ -290,6 +300,68 @@ fn draw_header(
         TEXT,
     );
 
+    if ed.can_record
+        && let Some(r) = f.record_control()
+    {
+        let label = Text::translate(
+            if ed.recording {
+                "cinematix.record.stop"
+            } else {
+                "cinematix.record.start"
+            },
+            &[],
+        );
+        box_frame(batch, atlas, r);
+        if r.contains(cursor.0, cursor.1) {
+            fill(batch, atlas, r, HOVER);
+        }
+        left_label(batch, atlas, r, &label, TEXT);
+        register(&label, r);
+    }
+    if let Some(r) = f.player_control() {
+        let label = Text::translate(
+            if ed.show_player {
+                "cinematix.player.hide"
+            } else {
+                "cinematix.player.show"
+            },
+            &[],
+        );
+        box_frame(batch, atlas, r);
+        if r.contains(cursor.0, cursor.1) {
+            fill(batch, atlas, r, HOVER);
+        }
+        left_label(batch, atlas, r, &label, TEXT);
+        register(&label, r);
+    }
+    if ed.can_record
+        && (!ed.recording || ed.clip_armed)
+        && let Some(r) = f.clip_control()
+    {
+        let label = Text::translate(
+            if ed.clip_armed {
+                "cinematix.clip.save"
+            } else {
+                "cinematix.clip.arm"
+            },
+            &[],
+        );
+        box_frame(batch, atlas, r);
+        if r.contains(cursor.0, cursor.1) {
+            fill(batch, atlas, r, HOVER);
+        }
+        left_label(batch, atlas, r, &label, TEXT);
+        register(&label, r);
+    }
+    if let (Some(key), Some(r)) = (ed.spectator_control, f.spectator_control()) {
+        let label = Text::translate(key, &[]);
+        box_frame(batch, atlas, r);
+        if r.contains(cursor.0, cursor.1) {
+            fill(batch, atlas, r, HOVER);
+        }
+        left_label(batch, atlas, r, &label, TEXT);
+        register(&label, r);
+    }
     let mut hovered = None;
     for (tool, r) in &f.tools {
         let hover = r.contains(cursor.0, cursor.1);
@@ -351,6 +423,7 @@ fn tab_icon(tab: crate::frame::TimelineTab) -> Icon {
         TimelineTab::DopeSheet => glyphs::LIST,
         TimelineTab::Curves => glyphs::CURVES,
         TimelineTab::Clips => glyphs::FILM,
+        TimelineTab::Shots => glyphs::VIDEO_CAMERA,
     }
 }
 
@@ -575,7 +648,7 @@ fn draw_field(
     cursor: (f32, f32),
 ) {
     let (min, max, _) = field.range();
-    let v = field.get(&ed.doc).clamp(min, max);
+    let v = field.get_for(&ed.doc, ed.active_camera()).clamp(min, max);
     let frac = if (max - min).abs() < f64::EPSILON {
         0.0
     } else {
@@ -585,7 +658,11 @@ fn draw_field(
     let value = if field == Field::FilmLength && ed.doc.scene.meta.open_ended {
         Text::translate("cinematix.film.unlimited", &[]).plain()
     } else {
-        format!("{}{}", field.text(&ed.doc), field.unit())
+        format!(
+            "{}{}",
+            field.text_for(&ed.doc, ed.active_camera()),
+            field.unit()
+        )
     };
     let hover = r.contains(cursor.0, cursor.1);
     let held = ed.dragging_field(field);
@@ -688,7 +765,9 @@ fn draw_vector_rows(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtl
                 crate::frame::Axis::PositionX => AXIS_X,
                 crate::frame::Axis::PositionY => AXIS_Y,
                 crate::frame::Axis::PositionZ => AXIS_Z,
-                crate::frame::Axis::Yaw | crate::frame::Axis::Pitch => CHEVRON,
+                crate::frame::Axis::Yaw | crate::frame::Axis::Pitch | crate::frame::Axis::Roll => {
+                    CHEVRON
+                }
             };
             batch.fill(atlas, r.x + 1.0, r.y + 1.0, 2.0, r.h - 2.0, edge);
             text(
@@ -696,7 +775,11 @@ fn draw_vector_rows(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtl
                 atlas,
                 r.x + 8.0,
                 r.y + (r.h - 8.0) * 0.5,
-                &Text::literal(axis.label()),
+                &if axis.is_position() {
+                    Text::literal(axis.label())
+                } else {
+                    Text::translate(axis.tag(), &[])
+                },
                 OUTLINE,
             );
             let value = format!("{:.2}", ed.axis_value(*axis));
@@ -1095,14 +1178,110 @@ fn draw_timeline(
             f.free_check,
         );
     }
+    if f.guides_check.w > 0.0 {
+        let check = Rect::new(f.guides_check.x, f.guides_check.y, 16.0, 16.0);
+        box_frame(batch, atlas, check);
+        if ed.framing_guides {
+            fill(
+                batch,
+                atlas,
+                Rect::new(check.x + 4.0, check.y + 4.0, 8.0, 8.0),
+                CHEVRON,
+            );
+        }
+        let label = Text::translate("cinematix.transport.guides", &[]);
+        text(
+            batch,
+            atlas,
+            check.x + 22.0,
+            check.y + 4.0,
+            &label,
+            if f.guides_check.contains(cursor.0, cursor.1) {
+                VALUE
+            } else {
+                DIM
+            },
+        );
+        register(&label, f.guides_check);
+    }
     draw_ruler(ed, f, batch, atlas);
     match ed.tab {
         crate::frame::TimelineTab::Curves => draw_curve(ed, f, batch, atlas),
+        crate::frame::TimelineTab::Shots => draw_shots(ed, f, batch, atlas, cursor),
         crate::frame::TimelineTab::Clips => draw_clips(ed, f, batch, atlas, cursor),
         crate::frame::TimelineTab::DopeSheet => draw_rows(ed, f, batch, atlas),
     }
     draw_playhead(ed, f, batch, atlas);
     draw_transport(ed, f, batch, atlas, cursor);
+}
+
+fn draw_shots(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+    let cameras = ed.shot_cameras();
+    let active = ed.active_camera();
+    let remove = ed
+        .doc
+        .scene
+        .meta
+        .camera_cuts
+        .iter()
+        .any(|cut| cut.at == ed.time());
+    tr(
+        batch,
+        atlas,
+        f.lanes.x + 6.0,
+        f.lanes.y + 6.0,
+        "cinematix.shots.cut_here",
+        DIM,
+    );
+    for cut in &ed.doc.scene.meta.camera_cuts {
+        let x = f.axis.x(cut.at);
+        if (f.ruler.x + 4.0..=f.ruler.x + f.ruler.w - 4.0).contains(&x) {
+            let y = f.lanes.y + 10.0;
+            batch.fill_quad(
+                atlas,
+                [[x, y - 5.0], [x + 5.0, y], [x, y + 5.0], [x - 5.0, y]],
+                if cut.at == ed.time() { TEXT } else { ACCENT },
+            );
+        }
+    }
+    for (i, r) in f.shot_controls(cameras.len() + 2).enumerate() {
+        let (label, enabled, selected) = match i {
+            0 => (Text::translate("cinematix.shots.new", &[]), true, false),
+            1 => (
+                Text::translate("cinematix.shots.remove", &[]),
+                remove,
+                false,
+            ),
+            _ => {
+                let id = cameras[i - 2];
+                (
+                    if id == ed.doc.scene.camera {
+                        Text::tr("cinematix.shots.camera", &[&1])
+                    } else {
+                        Text::literal(ed.doc.node_name(id))
+                    },
+                    id != active,
+                    id == active,
+                )
+            }
+        };
+        box_frame(batch, atlas, r);
+        if selected || (enabled && r.contains(cursor.0, cursor.1)) {
+            fill(batch, atlas, r, if selected { ACTIVE } else { HOVER });
+        }
+        let start = batch.vertices.len();
+        left_label(
+            batch,
+            atlas,
+            r,
+            &label,
+            if enabled || selected { TEXT } else { FAINT },
+        );
+        batch.clip_since(start, r.x, r.y, r.x + r.w, r.y + r.h);
+        if enabled {
+            register(&label, r);
+        }
+    }
 }
 
 fn draw_ruler(ed: &Editor, f: &Frame, batch: &mut HudBatch, atlas: &HudAtlas) {
@@ -1423,7 +1602,7 @@ fn draw_keys(ed: &Editor, f: &Frame, row: &Row, batch: &mut HudBatch, atlas: &Hu
         if x < row.keys.x - 4.0 || x > row.keys.x + row.keys.w + 4.0 {
             continue;
         }
-        let selected = ed.selected_key == Some((row.chan, ki));
+        let selected = ed.key_selected(row.chan, ki);
         let colour = if selected { ACCENT } else { KEY };
         let r = if selected { 5.0 } else { 4.0 };
         batch.fill_quad(
@@ -1566,6 +1745,7 @@ mod tests {
         });
         assert_eq!(key_state(&ch, 0.0, 24.0), 0);
         ch.keys.push(Key {
+            ease: Default::default(),
             t: 0.0,
             v: Value::F32(70.0),
             interp: cinematix_anim::Interp::Linear,

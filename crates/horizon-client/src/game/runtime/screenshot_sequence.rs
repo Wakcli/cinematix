@@ -63,17 +63,33 @@ impl Game<'_> {
     /// editor screen open, so it passes false and the camera comes from the film.
     pub(super) fn stillness_refusal(&self, playing: bool) -> Option<String> {
         let g = &self.settings.horizon;
-        if !self.clock.still() {
+        // The isolated replay is driven by the exported frame timestamp. Never
+        // exempt a live or in-world replay session from the still-world checks.
+        let frame_driven_replay = !playing
+            && self.replay.standalone
+            && self
+                .replay
+                .driver
+                .as_ref()
+                .is_some_and(|driver| driver.is_paused());
+        if !frame_driven_replay && !self.clock.still() {
             return Some("the world must be still: set HORIZON_STILL=1 or run /tick freeze".into());
         }
-        if !self.clock.frozen() || self.clock.stepping() || self.clock.sprinting() {
-            return Some("the world must be frozen (/tick freeze), not stepping or sprinting".into());
+        if !frame_driven_replay
+            && (!self.clock.frozen() || self.clock.stepping() || self.clock.sprinting())
+        {
+            return Some(
+                "the world must be frozen (/tick freeze), not stepping or sprinting".into(),
+            );
         }
         if self.title.is_some() {
             return Some("the title screen is open".into());
         }
         if playing && self.screen != Screen::Playing {
-            return Some(format!("the {} screen is open, not the world", self.screen.id()));
+            return Some(format!(
+                "the {} screen is open, not the world",
+                self.screen.id()
+            ));
         }
         if self.player.is_none() {
             return Some("no player is in the world".into());

@@ -29,7 +29,7 @@ restoring everything.
 | Editor lifecycle: open, close, cursor, input restoration | done — `game/interface/cinematix.rs`; verified headless |
 | Icon rail | done — eight sections with BBS mod's icon sheet (MIT, [ATTRIBUTION](ATTRIBUTION.md)); flat hover/active, tooltips, registered |
 | Dock tree and panel widget | done — inspector/viewport/timeline split with draggable resizers and BBS panel headers; the inspector tears out into a floating panel by its header, moves, is swallowed over the timeline, and docks again by its button or at the right edge. The inspector has Properties and Scene tabs |
-| Overlay card, context menu | partial — right-click menus on rows/keys/lanes with add/delete/interpolation/fit; mute, rename and paste are drawn dimmed and inert; no overlay card yet |
+| Overlay card, context menu | partial — right-click menus on rows/keys/lanes with add/delete/interpolation/fit and key clipboard actions; mute and rename are drawn dimmed and inert; no overlay card yet |
 | Top toolbar (save/undo/redo/render) | done — Save writes the default `.cmx`, Undo/Redo drive the history, Render starts an MP4 of the film range at the document's resolution and fps (needs `--offscreen` and a still world, and says why otherwise) |
 | Bottom dock tabs (Dope Sheet / Curve Editor / Clips) | done — Dope Sheet, Curve Editor and Clips; Clips is a shot list over the one timeline, Add clip takes the visible range, clicking a clip seeks and zooms to it, x deletes, both undo |
 | Numeric scrubber | done — bounded fill bars and drag-number boxes from the supplied primitive kit; drag with Shift ×10 and Ctrl ÷10; camera Position and Yaw/Pitch vector rows |
@@ -76,7 +76,7 @@ path wrote to `<player dir>/cinematix/film.cmx`.
 |---|---|
 | Channels, keys, interpolation, pure evaluation | done — `cinematix-anim`, 10 tests |
 | Time axis, zoom, pan, snapping, hit testing | done — `cinematix-timeline`, 9 tests |
-| Dope sheet editing | done — rows, keys, selection, drag in time, add/delete, per-key interpolation |
+| Dope sheet editing | done — rows, multi-selection, group drag, copy/paste/duplicate, add/delete, interpolation |
 | Editing commands and undo | done — add/delete/move/interp, 64-step undo/redo (toolbar, Ctrl+Z/Y); live camera looks are not snapshotted |
 | Curve editor with Bezier handles | done — curve view per channel with X/Y/Z/W axes, vertical key editing, and both Bezier control points draggable in time and value; Bezier is offered in the interpolation menu |
 | Tree view (scene hierarchy) | done — disclosure, indentation, kind icons, selection |

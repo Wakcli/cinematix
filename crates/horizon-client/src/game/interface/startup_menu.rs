@@ -764,6 +764,11 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
+                Event::EditStudioReplay(path) => {
+                    self.menu.options_open = false;
+                    self.menu.dragging = false;
+                    self.menu.pending = Some(PendingWorldEntry::CinematixReplay(path));
+                }
                 Event::OpenStudioReplay(path) => {
                     self.menu.options_open = false;
                     self.menu.dragging = false;

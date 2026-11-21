@@ -165,6 +165,12 @@ pub struct CameraFx {
     pub shake_frequency: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraCut {
+    pub at: f64,
+    pub camera: NodeId,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SceneMeta {
     pub name: String,
@@ -181,6 +187,8 @@ pub struct SceneMeta {
     pub clips: Vec<Clip>,
     #[serde(default)]
     pub camera_fx: CameraFx,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub camera_cuts: Vec<CameraCut>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

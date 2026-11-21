@@ -183,11 +183,13 @@ mod tests {
             .unwrap();
         doc.channels[ci].keys = vec![
             Key {
+                ease: Default::default(),
                 t: 0.0,
                 v: Value::Vec3([1.0, 64.0, 2.0]),
                 interp: Interp::Smooth,
             },
             Key {
+                ease: Default::default(),
                 t: 2.0,
                 v: Value::Vec3([5.0, 70.0, -4.0]),
                 interp: Interp::Linear,
@@ -197,6 +199,7 @@ mod tests {
             .channel_index(NodeId(1), cinematix_anim::Prop::Fov)
             .unwrap();
         doc.channels[fi].keys = vec![Key {
+            ease: Default::default(),
             t: 1.0,
             v: Value::F32(35.0),
             interp: Interp::Step,
@@ -205,6 +208,7 @@ mod tests {
             .channel_index(NodeId(2), cinematix_anim::Prop::Intensity)
             .unwrap();
         doc.channels[li].keys = vec![Key {
+            ease: Default::default(),
             t: 0.5,
             v: Value::F32(2.5),
             interp: Interp::Smooth,
@@ -332,6 +336,7 @@ mod tests {
             .channel_index(NodeId(1), cinematix_anim::Prop::Fov)
             .unwrap();
         doc.channels[ci].keys = vec![Key {
+            ease: Default::default(),
             t: 0.0,
             v: Value::F32(70.0),
             interp: Interp::Smooth,

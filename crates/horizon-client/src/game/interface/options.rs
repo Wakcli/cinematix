@@ -531,6 +531,12 @@ impl Game<'_> {
                     self.confirm_trusted_link(ACCESSIBILITY_HELP_LINK, Screen::Options)
                 }
                 Event::Narrator => self.narrator_status_changed(),
+                Event::EditStudioReplay(_) => {
+                    self.system_message(horizon_client::text::Text::tr(
+                        "cinematix.replay.use_title",
+                        &[],
+                    ));
+                }
                 Event::OpenStudioReplay(path) => {
                     let path = path.to_string_lossy().to_string();
                     if let Err(e) = self.open_studio_replay(&path) {

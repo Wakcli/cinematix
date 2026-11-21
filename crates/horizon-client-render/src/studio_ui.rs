@@ -89,6 +89,7 @@ impl SavedRecordingItem {
 pub enum StudioAction {
     None,
     OpenReplay(PathBuf),
+    EditReplay(PathBuf),
     OpenFolder,
     Refresh,
     Back,
@@ -239,8 +240,8 @@ impl StudioUi {
         // Main content area layout
         let panel_w = (w - 40.0).clamp(280.0, 440.0);
         let panel_x = ((w - panel_w) / 2.0).floor();
-        let panel_y = 42.0;
-        let panel_h = (h - 76.0).max(100.0);
+        let panel_y = 62.0;
+        let panel_h = (h - 96.0).max(80.0);
 
         // Glass panel backdrop for recordings list
         style::panel(batch, atlas, [panel_x, panel_y, panel_w, panel_h]);
@@ -374,6 +375,22 @@ impl StudioUi {
             }
         }
 
+        let edit = [panel_x + panel_w - 128.0, 40.0, 128.0, 18.0];
+        let enabled = self.selected.and_then(|i| self.recordings.get(i)).is_some();
+        let label = Text::tr("cinematix.replay.edit", &[]);
+        crate::widgets::record(&label.plain(), edit, enabled);
+        style::button(
+            batch,
+            atlas,
+            edit,
+            &label,
+            (
+                ui::hovered(cursor, edit[0], edit[1], edit[2], edit[3]),
+                enabled,
+                false,
+            ),
+        );
+
         // Bottom Button Bar
         let btn_y = h - 28.0;
         let btn_h = 20.0;
@@ -417,10 +434,20 @@ impl StudioUi {
         let (w, h) = size;
         let panel_w = (w - 40.0).clamp(280.0, 440.0);
         let panel_x = ((w - panel_w) / 2.0).floor();
-        let panel_y = 42.0;
-        let panel_h = (h - 76.0).max(100.0);
+        let panel_y = 62.0;
+        let panel_h = (h - 96.0).max(80.0);
         let btn_y = h - 28.0;
         let btn_h = 20.0;
+
+        let edit = [panel_x + panel_w - 128.0, 40.0, 128.0, 18.0];
+        if ui::hovered(cursor, edit[0], edit[1], edit[2], edit[3]) {
+            return self
+                .selected
+                .and_then(|i| self.recordings.get(i))
+                .map_or(StudioAction::None, |item| {
+                    StudioAction::EditReplay(item.path.clone())
+                });
+        }
 
         // Button 1: Open Folder
         let f_btn = [panel_x, btn_y, 130.0, btn_h];
@@ -549,9 +576,14 @@ mod tests {
         assert_eq!(ui.selected, Some(0));
 
         // Clicking a card selects it for inspection without opening the editor.
-        let action = ui.click((200.0, 60.0), (427.0, 720.0));
+        let action = ui.click((200.0, 80.0), (427.0, 720.0));
         assert_eq!(action, StudioAction::None);
         assert_eq!(ui.selected, Some(0));
+
+        assert!(matches!(
+            ui.click((325.0, 49.0), (427.0, 720.0)),
+            StudioAction::EditReplay(_)
+        ));
 
         // Click the bottom-bar Open Replay button.
         // Panel width = 387, panel_x = 20, button x = 227..337, y = 692..712.

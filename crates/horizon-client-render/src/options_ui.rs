@@ -1751,6 +1751,7 @@ pub enum Event {
     OpenStudioFolder,
     /// Start playback from the selected Studio recording.
     OpenStudioReplay(std::path::PathBuf),
+    EditStudioReplay(std::path::PathBuf),
 }
 /// A row of the Music page: the track, and the pool it is played from.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -3205,6 +3206,9 @@ impl OptionsUi {
             return match self.studio.click((x, y), size) {
                 StudioAction::None => Vec::new(),
                 StudioAction::Refresh => vec![Event::ButtonClick],
+                StudioAction::EditReplay(path) => {
+                    vec![Event::ButtonClick, Event::EditStudioReplay(path)]
+                }
                 StudioAction::OpenReplay(path) => {
                     vec![Event::ButtonClick, Event::OpenStudioReplay(path)]
                 }

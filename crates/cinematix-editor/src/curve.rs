@@ -118,11 +118,13 @@ mod tests {
     fn a_flat_channel_still_gets_a_window() {
         let c = channel(vec![
             Key {
+                ease: Default::default(),
                 t: 0.0,
                 v: Value::F32(4.0),
                 interp: Interp::Linear,
             },
             Key {
+                ease: Default::default(),
                 t: 1.0,
                 v: Value::F32(4.0),
                 interp: Interp::Linear,

@@ -755,6 +755,9 @@ impl Game<'_> {
     /// `LevelExtractor`'s skip of the camera entity: the player's own body
     /// is drawn unless the camera is in first person, or while it sleeps.
     pub(super) fn own_body_in_view(&self) -> bool {
+        if self.screen == Screen::Cinematix && self.cinematix.show_player && !self.spectator() {
+            return true;
+        }
         !self.camera_type.is_first_person() || self.sleeping.is_some() || self.studio.flying()
     }
     /// Whether the player's own model shows in the world view (its body or,

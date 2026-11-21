@@ -158,6 +158,7 @@ impl Document {
                 fps: 24.0,
                 range: (0.0, 10.0),
                 open_ended: true,
+                camera_cuts: Vec::new(),
                 resolution: (1920, 1080),
                 environment: Default::default(),
                 clips: Vec::new(),
@@ -191,6 +192,7 @@ impl Document {
             .channels
             .iter()
             .filter_map(|ch| ch.keys.last().map(|k| k.t))
+            .chain(meta.camera_cuts.iter().map(|cut| cut.at))
             .chain(self.scene.world.ops().iter().filter_map(|op| op.at))
             .filter(|t| t.is_finite() && *t >= start)
             .reduce(f64::max);
@@ -282,6 +284,7 @@ impl Document {
             return Some(i);
         }
         ch.keys.push(Key {
+            ease: Default::default(),
             t,
             v: value,
             interp,
@@ -301,6 +304,7 @@ impl Document {
             return Some(i);
         }
         ch.keys.push(Key {
+            ease: Default::default(),
             t,
             v: value,
             interp,
@@ -348,19 +352,50 @@ impl Document {
         ids
     }
 
+    pub fn camera_at_time(&self, t: f64) -> NodeId {
+        self.camera_for_cut(|at| at <= t)
+    }
+
+    pub fn camera_before_time(&self, t: f64) -> NodeId {
+        self.camera_for_cut(|at| at < t)
+    }
+
+    fn camera_for_cut(&self, includes: impl Fn(f64) -> bool) -> NodeId {
+        self.scene
+            .meta
+            .camera_cuts
+            .iter()
+            .filter(|cut| {
+                includes(cut.at)
+                    && self
+                        .node(cut.camera)
+                        .is_some_and(|n| matches!(n.kind, NodeKind::Camera(_)))
+            })
+            .max_by(|a, b| a.at.total_cmp(&b.at))
+            .map_or(self.scene.camera, |cut| cut.camera)
+    }
+
     pub fn camera(&self) -> Option<&Node> {
         self.node(self.scene.camera)
     }
 
     pub fn camera_data(&self) -> Option<&CameraData> {
-        match &self.scene.nodes.get(&self.scene.camera)?.kind {
+        self.camera_data_for(self.scene.camera)
+    }
+
+    pub fn camera_data_mut(&mut self) -> Option<&mut CameraData> {
+        self.camera_data_for_mut(self.scene.camera)
+    }
+
+    pub fn camera_data_for(&self, id: NodeId) -> Option<&CameraData> {
+        match &self.scene.nodes.get(&id)?.kind {
             NodeKind::Camera(c) => Some(c),
             _ => None,
         }
     }
 
-    pub fn camera_data_mut(&mut self) -> Option<&mut CameraData> {
-        match self.scene.nodes.get_mut(&self.scene.camera)?.kind {
+    pub fn camera_data_for_mut(&mut self, id: NodeId) -> Option<&mut CameraData> {
+        match self.scene.nodes.get_mut(&id)?.kind {
             NodeKind::Camera(ref mut c) => Some(c),
             _ => None,
         }

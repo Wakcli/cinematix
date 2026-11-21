@@ -560,6 +560,7 @@ pub(super) struct Remote {
     /// `BlockStatePredictionHandler.lastTeleportSequence`: the sequence of the last
     /// teleport, so a prediction made before it keeps its block but not its snap.
     last_teleport_sequence: i32,
+    pub(super) teleport_receipts: u64,
     pub(super) position_sender: horizon_client::player_sync::PositionSender,
     last_input: u8,
     was_sprinting: bool,
@@ -1166,6 +1167,7 @@ impl Game<'_> {
             simulation_distance: self.settings.simulation_distance,
             sequence: 0,
             last_teleport_sequence: -1,
+            teleport_receipts: 0,
             position_sender: Default::default(),
             last_input: 0,
             was_sprinting: false,
@@ -1408,6 +1410,7 @@ impl Game<'_> {
             simulation_distance: self.settings.simulation_distance,
             sequence: 0,
             last_teleport_sequence: -1,
+            teleport_receipts: 0,
             position_sender: Default::default(),
             last_input: 0,
             was_sprinting: false,
@@ -6012,6 +6015,7 @@ impl Game<'_> {
         // BlockStatePredictionHandler.onTeleport: a prior prediction keeps its block, not its remembered player position.
         if let Some(r) = self.remote.as_mut() {
             r.last_teleport_sequence = r.sequence;
+            r.teleport_receipts = r.teleport_receipts.wrapping_add(1);
         }
         // The server's answer to a passage crossed (`cross_passage`), or any other.
         self.passages.crossing = None;

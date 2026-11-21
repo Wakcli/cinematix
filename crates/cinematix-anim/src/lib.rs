@@ -80,11 +80,46 @@ pub enum Interp {
     },
 }
 
+/// Timing only; leaves the segment's spatial shape unchanged.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Ease {
+    #[default]
+    None,
+    In,
+    Out,
+    InOut,
+}
+
+impl Ease {
+    fn sample(self, u: f32) -> f32 {
+        match self {
+            Self::None => u,
+            Self::In => u * u,
+            Self::Out => u * (2.0 - u),
+            Self::InOut => u * u * (3.0 - 2.0 * u),
+        }
+    }
+
+    pub fn midpoint_time_fraction(self) -> f64 {
+        match self {
+            Self::In => 0.5_f64.sqrt(),
+            Self::Out => 1.0 - 0.5_f64.sqrt(),
+            _ => 0.5,
+        }
+    }
+
+    fn is_none(&self) -> bool {
+        *self == Self::None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Key {
     pub t: f64,
     pub v: Value,
     pub interp: Interp,
+    #[serde(default, skip_serializing_if = "Ease::is_none")]
+    pub ease: Ease,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +168,7 @@ impl Channel {
 fn blend(keys: &[Key], i: usize, u: f32) -> Value {
     let a = &keys[i - 1];
     let b = &keys[i];
+    let u = a.ease.sample(u);
     let u = match a.interp {
         Interp::Step => 0.0,
         Interp::Linear => u,
@@ -380,6 +416,7 @@ mod tests {
 
     fn k(t: f64, v: f32, interp: Interp) -> Key {
         Key {
+            ease: Default::default(),
             t,
             v: Value::F32(v),
             interp,
@@ -388,6 +425,7 @@ mod tests {
 
     fn v3(t: f64, x: f32, y: f32, z: f32, interp: Interp) -> Key {
         Key {
+            ease: Default::default(),
             t,
             v: Value::Vec3([x, y, z]),
             interp,
@@ -395,9 +433,35 @@ mod tests {
     }
 
     #[test]
+    fn timing_presets_do_not_change_the_quadratic_path() {
+        let mut a = v3(
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            Interp::Quadratic {
+                midpoint_offset: [0.0, 4.0, 0.0],
+            },
+        );
+        let b = v3(2.0, 8.0, 0.0, 0.0, Interp::Linear);
+        for ease in [Ease::In, Ease::Out, Ease::InOut] {
+            a.ease = ease;
+            let channel = chan(vec![a, b]);
+            let Value::Vec3(midpoint) = channel.eval(2.0 * ease.midpoint_time_fraction()).unwrap()
+            else {
+                panic!()
+            };
+            assert!((Vec3::from_array(midpoint) - Vec3::new(4.0, 4.0, 0.0)).length() < 1e-5);
+            assert_eq!(channel.eval(0.0), Some(a.v));
+            assert_eq!(channel.eval(2.0), Some(b.v));
+        }
+    }
+
+    #[test]
     fn quadratic_midpoint_bends_without_moving_endpoints() {
         let keys = [
             Key {
+                ease: Default::default(),
                 t: 0.0,
                 v: Value::Vec3([0.0, 0.0, 0.0]),
                 interp: Interp::Quadratic {
@@ -405,6 +469,7 @@ mod tests {
                 },
             },
             Key {
+                ease: Default::default(),
                 t: 2.0,
                 v: Value::Vec3([8.0, 0.0, 0.0]),
                 interp: Interp::Linear,
@@ -495,11 +560,13 @@ mod tests {
         let b = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
         let c = chan(vec![
             Key {
+                ease: Default::default(),
                 t: 0.0,
                 v: Value::Quat(a.to_array()),
                 interp: Interp::Spline,
             },
             Key {
+                ease: Default::default(),
                 t: 1.0,
                 v: Value::Quat(b.to_array()),
                 interp: Interp::Spline,
@@ -568,11 +635,13 @@ mod tests {
     #[test]
     fn quat_slerp_stays_unit() {
         let a = Key {
+            ease: Default::default(),
             t: 0.0,
             v: Value::Quat(Quat::from_rotation_y(0.0).to_array()),
             interp: Interp::Linear,
         };
         let b = Key {
+            ease: Default::default(),
             t: 1.0,
             v: Value::Quat(Quat::from_rotation_y(1.5).to_array()),
             interp: Interp::Linear,

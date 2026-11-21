@@ -43,6 +43,7 @@ pub(super) struct Render {
     saved_size: [u32; 2],
     saved_playhead: f64,
     saved_playing: bool,
+    saved_free_view: bool,
     started: Instant,
 }
 
@@ -146,6 +147,18 @@ impl Game<'_> {
         if self.screen != super::Screen::Cinematix {
             return Err("open the Cinematix editor before rendering the film".into());
         }
+        if self.replay.driver.is_some() {
+            if !self.replay.standalone {
+                return Err("open the recording from the main menu before rendering".into());
+            }
+            let duration = self
+                .cinematix
+                .replay_duration
+                .ok_or("no recording duration")?;
+            if f64::from(end - 1) / f64::from(fps) > duration {
+                return Err("render range extends beyond the recording".into());
+            }
+        }
         if self.cinematix_export.is_some() {
             return Err("a Cinematix render is already running".into());
         }
@@ -168,12 +181,12 @@ impl Game<'_> {
 
         let path = PathBuf::from(path);
         let dir = output_dir(&path);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let video = is_video(&path).then_some(path.clone());
         let saved_size = [renderer.config.width, renderer.config.height];
         let saved_playhead = self.cinematix.playhead.t;
         let saved_playing = self.cinematix.playing;
+        let saved_free_view = self.cinematix.preview_free;
         let (next, resumed) = if resume {
             scan_frames(&dir, start, end)
         } else {
@@ -187,6 +200,7 @@ impl Game<'_> {
             return Err(format!("this device cannot draw {width}x{height}").into());
         }
         self.cinematix.playing = false;
+        self.cinematix.preview_free = false;
         self.cinematix_export = Some(Render {
             start,
             end,
@@ -203,6 +217,7 @@ impl Game<'_> {
             saved_size,
             saved_playhead,
             saved_playing,
+            saved_free_view,
             started: Instant::now(),
         });
         if reply.is_some() {
@@ -233,13 +248,14 @@ impl Game<'_> {
             return Ok(true);
         }
         let (frame, fps, path) = {
-            let render = self
-                .cinematix_export
-                .as_ref()
-                .expect("a running render");
+            let render = self.cinematix_export.as_ref().expect("a running render");
             (render.next, render.fps, render.frame_path(render.next))
         };
         self.cinematix.playhead.t = f64::from(frame) / f64::from(fps);
+        if let Err(error) = self.sync_cinematix_replay() {
+            self.end_cinematix_render(Err(error.to_string()));
+            return Ok(true);
+        }
         // The layer can mark sections dirty at this very frame (an op activating here). Give the
         // world update and the mesher two redraws to land the remesh, then wait for the queues;
         // the frame is retried, never skipped.
@@ -270,6 +286,18 @@ impl Game<'_> {
             return Ok(false);
         }
         if let Some(refusal) = self.stillness_refusal(false) {
+            if self.replay.standalone
+                && (refusal.starts_with("the world has work left")
+                    || refusal == "a level is still loading"
+                    || refusal == "no player is in the world"
+                    || refusal == "no world is loaded")
+            {
+                let render = self.cinematix_export.as_mut().expect("a running render");
+                render.stalls += 1;
+                if render.stalls <= 1200 {
+                    return Ok(false);
+                }
+            }
             self.end_cinematix_render(Err(refusal));
             return Ok(true);
         }
@@ -394,6 +422,10 @@ impl Game<'_> {
         }
         self.cinematix.playhead.t = render.saved_playhead;
         self.cinematix.playing = render.saved_playing;
+        self.cinematix.preview_free = render.saved_free_view;
+        if let Err(error) = self.sync_cinematix_replay() {
+            log::warn!("Could not restore replay playhead: {error}");
+        }
         // The world layer follows the playhead back: a block that was active for frame N is gone
         // again in the editor's own time.
         self.cinematix_world_time = None;
@@ -447,11 +479,12 @@ impl Game<'_> {
             }
             ["cinematix", "render", "cancel"] => Ok(()),
             ["cinematix", "status"] | ["help"] | ["hello"] | ["status"] | ["state"] => Ok(()),
-            _ => Err("a Cinematix render is running: wait for its reply, or `cinematix render cancel`"
-                .into()),
+            _ => Err(
+                "a Cinematix render is running: wait for its reply, or `cinematix render cancel`"
+                    .into(),
+            ),
         }
     }
-
 }
 
 #[cfg(test)]

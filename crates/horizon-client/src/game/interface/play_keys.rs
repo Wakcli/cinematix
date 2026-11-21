@@ -178,6 +178,7 @@ impl Game<'_> {
             }
             // key.cinematix (Horizon's): the film editor over the world.
             KeyCode::F8 if self.screen == Screen::Playing => {
+                self.save_armed_cinematix_clip();
                 self.open_cinematix_screen();
             }
             KeyCode::KeyB if self.screen == Screen::EmoteWheel => self.close_emote_wheel(None),

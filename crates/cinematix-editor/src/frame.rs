@@ -14,13 +14,15 @@ pub const TAB_H: f32 = 20.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TimelineTab {
     DopeSheet,
+    Shots,
     Curves,
     Clips,
 }
 
 impl TimelineTab {
-    pub const ALL: [TimelineTab; 3] = [
+    pub const ALL: [TimelineTab; 4] = [
         TimelineTab::DopeSheet,
+        TimelineTab::Shots,
         TimelineTab::Curves,
         TimelineTab::Clips,
     ];
@@ -28,6 +30,7 @@ impl TimelineTab {
     pub fn label(self) -> &'static str {
         match self {
             TimelineTab::DopeSheet => "cinematix.tab.dope_sheet",
+            TimelineTab::Shots => "cinematix.tab.shots",
             TimelineTab::Curves => "cinematix.tab.curves",
             TimelineTab::Clips => "cinematix.tab.clips",
         }
@@ -52,7 +55,7 @@ impl InspectorTab {
 }
 
 /// The two camera vector rows above the scalar fields: a position (X/Y/Z) and a view direction
-/// (yaw/pitch). Both edit the camera at the playhead.
+/// (yaw/pitch/roll). Both edit the camera at the playhead.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VectorRow {
     Position,
@@ -75,6 +78,7 @@ pub enum Axis {
     PositionZ,
     Yaw,
     Pitch,
+    Roll,
 }
 
 impl Axis {
@@ -85,6 +89,7 @@ impl Axis {
             Axis::PositionZ => "Z",
             Axis::Yaw => "Yaw",
             Axis::Pitch => "Pitch",
+            Axis::Roll => "Roll",
         }
     }
 
@@ -95,6 +100,7 @@ impl Axis {
             Axis::PositionZ => "cinematix.axis.position_z",
             Axis::Yaw => "cinematix.axis.yaw",
             Axis::Pitch => "cinematix.axis.pitch",
+            Axis::Roll => "cinematix.axis.roll",
         }
     }
 
@@ -107,7 +113,7 @@ impl Axis {
             Axis::PositionX => 0,
             Axis::PositionY => 1,
             Axis::PositionZ => 2,
-            Axis::Yaw | Axis::Pitch => 0,
+            Axis::Yaw | Axis::Pitch | Axis::Roll => 0,
         }
     }
 
@@ -116,7 +122,7 @@ impl Axis {
             Axis::PositionX | Axis::PositionY | Axis::PositionZ => {
                 (-30_000_000.0, 30_000_000.0, 0.1)
             }
-            Axis::Yaw => (-180.0, 180.0, 0.5),
+            Axis::Yaw | Axis::Roll => (-180.0, 180.0, 0.5),
             Axis::Pitch => (-90.0, 90.0, 0.5),
         }
     }
@@ -207,6 +213,7 @@ pub struct Frame {
     pub clip_handles: Vec<(u8, Rect)>,
     pub loop_check: Rect,
     pub free_check: Rect,
+    pub guides_check: Rect,
     pub rows: Vec<Row>,
     pub tree: Vec<(NodeId, usize, bool, Rect)>,
     pub tree_toggle: Vec<(NodeId, Rect)>,
@@ -300,6 +307,7 @@ impl Frame {
         for tab in TimelineTab::ALL {
             let width = match tab {
                 TimelineTab::DopeSheet => 84.0,
+                TimelineTab::Shots => 62.0,
                 TimelineTab::Curves => 88.0,
                 TimelineTab::Clips => 56.0,
             };
@@ -340,7 +348,7 @@ impl Frame {
             && let Some(kind) = doc.value_at(ci, 0.0)
         {
             let count = crate::curve::components(kind);
-            let mut ax = timeline.x + 240.0;
+            let mut ax = tab_x + 2.0;
             for i in 0..count {
                 let rect = Rect::new(ax, timeline.y + 2.0, 16.0, 16.0);
                 if rect.x + rect.w > timeline.x + timeline.w - 4.0 {
@@ -390,13 +398,19 @@ impl Frame {
             x += rect.w + t.gap;
         }
 
-        let loop_check = if timeline.w > 360.0 + 48.0 {
-            Rect::new(timeline.x + 318.0, timeline.y + 2.0, 52.0, 16.0)
+        let loop_check = if timeline.w >= 476.0 {
+            Rect::new(timeline.x + 390.0, timeline.y + 2.0, 52.0, 16.0)
         } else {
             Rect::new(0.0, 0.0, 0.0, 0.0)
         };
-        let free_check = if timeline.w > 440.0 + 48.0 {
+        let free_check = if timeline.w >= 526.0 {
             Rect::new(loop_check.x + 56.0, loop_check.y, 72.0, 16.0)
+        } else {
+            Rect::new(0.0, 0.0, 0.0, 0.0)
+        };
+
+        let guides_check = if timeline.w >= 600.0 {
+            Rect::new(free_check.x + 78.0, free_check.y, 72.0, 16.0)
         } else {
             Rect::new(0.0, 0.0, 0.0, 0.0)
         };
@@ -427,7 +441,7 @@ impl Frame {
                     fy += 14.0;
                     let axes: &[Axis] = match row {
                         VectorRow::Position => &[Axis::PositionX, Axis::PositionY, Axis::PositionZ],
-                        VectorRow::Rotation => &[Axis::Yaw, Axis::Pitch],
+                        VectorRow::Rotation => &[Axis::Yaw, Axis::Pitch, Axis::Roll],
                     };
                     let gap = 4.0;
                     let bw =
@@ -626,6 +640,7 @@ impl Frame {
             clip_handles,
             loop_check,
             free_check,
+            guides_check,
             rows,
             tree,
             tree_toggle,
@@ -640,6 +655,32 @@ impl Frame {
     pub fn with_window(mut self, t0: f64, t1: f64) -> Self {
         self.axis = TimeAxis::new(t0, t1, self.ruler.x, self.ruler.x + self.ruler.w);
         self
+    }
+
+    pub fn spectator_control(&self) -> Option<Rect> {
+        (self.header.w >= 902.0).then(|| Rect::new(582.0, 4.0, 155.0, 20.0))
+    }
+
+    pub fn clip_control(&self) -> Option<Rect> {
+        (self.header.w >= 735.0).then(|| Rect::new(434.0, 4.0, 142.0, 20.0))
+    }
+
+    pub fn player_control(&self) -> Option<Rect> {
+        (self.header.w >= 580.0).then(|| Rect::new(318.0, 4.0, 110.0, 20.0))
+    }
+
+    pub fn record_control(&self) -> Option<Rect> {
+        (self.header.w >= 480.0).then(|| Rect::new(164.0, 4.0, 148.0, 20.0))
+    }
+
+    pub fn shot_controls(&self, count: usize) -> impl Iterator<Item = Rect> + '_ {
+        (0..count).map_while(|i| {
+            let columns = (self.lanes.w / 116.0).floor().max(1.0) as usize;
+            let w = (self.lanes.w - 8.0).min(108.0);
+            let x = self.lanes.x + 4.0 + (i % columns) as f32 * 116.0;
+            let y = self.lanes.y + 24.0 + (i / columns) as f32 * 22.0;
+            (w > 0.0 && y + 19.0 <= self.lanes.y + self.lanes.h).then_some(Rect::new(x, y, w, 19.0))
+        })
     }
 
     pub fn key_area(&self, chan: usize) -> Option<Rect> {
@@ -748,7 +789,8 @@ mod tests {
         );
         assert_eq!(f.vectors.len(), 2);
         assert_eq!(f.vectors[0].2.len(), 3);
-        assert_eq!(f.vectors[1].2.len(), 2);
+        assert_eq!(f.vectors[1].2.len(), 3);
+        assert_eq!(f.vectors[1].2[2].0, Axis::Roll);
         for (_, label, axes) in &f.vectors {
             if let Some(l) = label {
                 assert!(f.inspector.contains(l.x, l.y));

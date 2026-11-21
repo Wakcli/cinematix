@@ -1,10 +1,11 @@
 use crate::document::Document;
 use crate::frame::Frame;
 use crate::menu::Menu;
-use cinematix_anim::{Interp, Prop, Value};
+use cinematix_anim::{Ease, Interp, Key, Prop, PropPath, Value};
 use cinematix_timeline::{Playhead, Snap, snap_t};
 use cinematix_ui::{Mods, Rect, Tokens};
 use glam::{Quat, Vec3};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MIN_SPAN: f64 = 1.0 / 120.0;
 
@@ -194,6 +195,10 @@ impl Field {
     }
 
     pub fn get(self, doc: &Document) -> f64 {
+        self.get_for(doc, doc.scene.camera)
+    }
+
+    pub fn get_for(self, doc: &Document, camera: cinematix_scene::NodeId) -> f64 {
         match self {
             Field::FilmLength => {
                 if doc.scene.meta.open_ended {
@@ -212,7 +217,7 @@ impl Field {
             Field::FogEnd => f64::from(doc.scene.meta.environment.fog_end.unwrap_or(128.0)),
             Field::Shake => f64::from(doc.scene.meta.camera_fx.shake_amplitude),
             Field::ShakeFrequency => f64::from(doc.scene.meta.camera_fx.shake_frequency),
-            _ => match doc.camera_data() {
+            _ => match doc.camera_data_for(camera) {
                 Some(c) => match self {
                     Field::Fov => c.fov_deg as f64,
                     Field::Near => c.near as f64,
@@ -237,6 +242,10 @@ impl Field {
     }
 
     pub fn set(self, doc: &mut Document, v: f64) {
+        self.set_for(doc, doc.scene.camera, v);
+    }
+
+    fn set_for(self, doc: &mut Document, camera: cinematix_scene::NodeId, v: f64) {
         let (min, max, _) = self.range();
         let v = v.clamp(min, max);
         match self {
@@ -257,7 +266,7 @@ impl Field {
             Field::Shake => doc.scene.meta.camera_fx.shake_amplitude = v as f32,
             Field::ShakeFrequency => doc.scene.meta.camera_fx.shake_frequency = v as f32,
             _ => {
-                if let Some(c) = doc.camera_data_mut() {
+                if let Some(c) = doc.camera_data_for_mut(camera) {
                     match self {
                         Field::Fov => c.fov_deg = v as f32,
                         Field::Near => c.near = v as f32,
@@ -294,8 +303,8 @@ impl Field {
         }
     }
 
-    pub fn text(self, doc: &Document) -> String {
-        let v = self.get(doc);
+    pub fn text_for(self, doc: &Document, camera: cinematix_scene::NodeId) -> String {
+        let v = self.get_for(doc, camera);
         match self {
             Field::Near | Field::Rain | Field::Thunder => format!("{v:.2}"),
             Field::Focus | Field::Aperture => format!("{v:.1}"),
@@ -329,6 +338,9 @@ pub enum KeyResult {
 /// What a panel button asked the game to do. Only implemented actions have a variant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Request {
+    Record,
+    ArmClip,
+    Spectator,
     Save,
     Render,
 }
@@ -340,6 +352,7 @@ enum Drag {
         chan: usize,
         key: usize,
         grab_dt: f64,
+        changed: bool,
     },
     Number {
         field: Field,
@@ -421,6 +434,8 @@ pub struct Editor {
     pub scroll: usize,
     pub selected_channel: Option<usize>,
     pub selected_key: Option<(usize, usize)>,
+    extra_keys: Vec<(PropPath, f64)>,
+    key_clipboard: Vec<(PropPath, Key)>,
     pub selected_node: Option<cinematix_scene::NodeId>,
     pub selected_clip: Option<usize>,
     pub status: Option<&'static str>,
@@ -437,6 +452,15 @@ pub struct Editor {
     pub free_pos: Vec3,
     pub free_yaw: f32,
     pub free_pitch: f32,
+    free_roll: f32,
+    pub framing_guides: bool,
+    /// Show the local actor while the film camera is detached from the player.
+    pub show_player: bool,
+    pub replay_duration: Option<f64>,
+    pub can_record: bool,
+    pub recording: bool,
+    pub clip_armed: bool,
+    pub spectator_control: Option<&'static str>,
     pub curve_axis: usize,
     pub expanded: std::collections::HashSet<cinematix_scene::NodeId>,
     /// Bumped whenever the document changes, so the world overlay re-resolves after an undo or a
@@ -475,6 +499,8 @@ impl Editor {
             scroll: 0,
             selected_channel: None,
             selected_key: None,
+            extra_keys: Vec::new(),
+            key_clipboard: Vec::new(),
             selected_node: None,
             selected_clip: None,
             status: None,
@@ -486,6 +512,14 @@ impl Editor {
             free_pos: Vec3::ZERO,
             free_yaw: 0.0,
             free_pitch: 0.0,
+            free_roll: 0.0,
+            framing_guides: false,
+            show_player: false,
+            replay_duration: None,
+            can_record: false,
+            recording: false,
+            clip_armed: false,
+            spectator_control: None,
             curve_axis: 0,
             expanded: Default::default(),
             revision: 0,
@@ -571,6 +605,8 @@ impl Editor {
 
     fn restore(&mut self, doc: Document) {
         self.doc = doc;
+        self.extra_keys.clear();
+        self.drag = None;
         self.revision = self.revision.wrapping_add(1);
         let channels = self.doc.channels.len();
         if self.selected_channel.is_some_and(|ci| ci >= channels) {
@@ -622,7 +658,8 @@ impl Editor {
     }
 
     pub fn range(&self) -> (f64, f64) {
-        self.doc.playback_range()
+        self.replay_duration
+            .map_or_else(|| self.doc.playback_range(), |end| (0.0, end))
     }
 
     fn max_scroll(&self) -> usize {
@@ -667,6 +704,10 @@ impl Editor {
 
     fn seek_in_place(&mut self, t: f64) {
         if !t.is_finite() {
+            return;
+        }
+        if let Some(end) = self.replay_duration {
+            self.playhead.t = t.clamp(0.0, end);
             return;
         }
         let (start, end) = self.doc.scene.meta.range;
@@ -717,7 +758,20 @@ impl Editor {
     }
 
     fn active_channel(&self) -> Option<usize> {
+        let camera = self.active_camera();
         self.selected_channel
+            .map(|ci| {
+                self.doc
+                    .channel(ci)
+                    .and_then(|ch| {
+                        let id = ch.target.node;
+                        (id != camera && self.doc.camera_data_for(id).is_some())
+                            .then(|| self.doc.channel_index(camera, ch.target.prop))
+                            .flatten()
+                    })
+                    .unwrap_or(ci)
+            })
+            .or_else(|| self.doc.channel_index(camera, Prop::Translation))
             .or_else(|| self.doc.channels.iter().position(|c| !c.keys.is_empty()))
             .or(Some(0))
             .filter(|i| *i < self.doc.channels.len())
@@ -729,8 +783,13 @@ impl Editor {
         };
         let t = self.playhead.t;
         self.checkpoint();
-        let target = &self.doc.channels[ci].target;
-        let key = if self.preview_free && target.node == self.doc.scene.camera {
+        let target = self.doc.channels[ci].target;
+        let key = if self.preview_free
+            && self
+                .doc
+                .node(target.node)
+                .is_some_and(|node| matches!(node.kind, cinematix_scene::NodeKind::Camera(_)))
+        {
             match target.prop {
                 Prop::Translation => {
                     let key = self
@@ -738,21 +797,18 @@ impl Editor {
                         .upsert_key(ci, t, Value::Vec3(self.free_pos.to_array()));
                     // A position capture in Free View records the framing as well.
                     if key.is_some()
-                        && let Some(rotation) = self
-                            .doc
-                            .channel_index(self.doc.scene.camera, Prop::Rotation)
+                        && let Some(rotation) = self.doc.channel_index(target.node, Prop::Rotation)
                     {
-                        let view = rotation_from_view(self.free_yaw, self.free_pitch);
+                        let view = self.free_orientation();
                         self.doc
                             .upsert_key(rotation, t, Value::Quat(view.to_array()));
                     }
                     key
                 }
-                Prop::Rotation => self.doc.upsert_key(
-                    ci,
-                    t,
-                    Value::Quat(rotation_from_view(self.free_yaw, self.free_pitch).to_array()),
-                ),
+                Prop::Rotation => {
+                    self.doc
+                        .upsert_key(ci, t, Value::Quat(self.free_orientation().to_array()))
+                }
                 _ => self.doc.insert_key(ci, t),
             }
         } else {
@@ -761,7 +817,7 @@ impl Editor {
         match key {
             Some(ki) => {
                 self.selected_channel = Some(ci);
-                self.selected_key = Some((ci, ki));
+                self.select_only_key(Some((ci, ki)));
                 self.status = Some("cinematix.status.key_added");
                 true
             }
@@ -769,42 +825,221 @@ impl Editor {
         }
     }
 
-    /// Sets the selected key's outgoing interpolation. The key decides the segment after it, so a
-    /// spline key bends toward the next key and a step key holds until it.
-    pub fn set_selected_interp(&mut self, interp: Interp) -> bool {
-        let Some((ci, ki)) = self.selected_key else {
+    pub(crate) fn select_only_key(&mut self, key: Option<(usize, usize)>) {
+        self.selected_key = key;
+        self.extra_keys.clear();
+    }
+
+    pub(crate) fn key_selected(&self, ci: usize, ki: usize) -> bool {
+        self.selected_key == Some((ci, ki))
+            || self.doc.channels.get(ci).is_some_and(|ch| {
+                ch.keys
+                    .get(ki)
+                    .is_some_and(|key| self.extra_keys.contains(&(ch.target, key.t)))
+            })
+    }
+
+    fn selected_keys(&self) -> BTreeSet<(usize, usize)> {
+        let mut keys = BTreeSet::new();
+        if let Some((ci, ki)) = self.selected_key
+            && self
+                .doc
+                .channels
+                .get(ci)
+                .is_some_and(|ch| ki < ch.keys.len())
+        {
+            keys.insert((ci, ki));
+        }
+        for &(path, t) in &self.extra_keys {
+            if let Some(ci) = self.doc.channel_index(path.node, path.prop) {
+                let keys_on_track = &self.doc.channels[ci].keys;
+                let ki = keys_on_track.partition_point(|key| key.t < t);
+                if keys_on_track.get(ki).is_some_and(|key| key.t == t) {
+                    keys.insert((ci, ki));
+                }
+            }
+        }
+        keys
+    }
+
+    fn select_group(&mut self, primary: Option<(usize, usize)>, keys: BTreeSet<(usize, usize)>) {
+        self.selected_key = primary;
+        self.extra_keys = keys
+            .into_iter()
+            .filter(|key| Some(*key) != primary)
+            .map(|(ci, ki)| {
+                let ch = &self.doc.channels[ci];
+                (ch.target, ch.keys[ki].t)
+            })
+            .collect();
+    }
+
+    pub fn copy_keys(&mut self) -> bool {
+        let keys: Vec<_> = self
+            .selected_keys()
+            .into_iter()
+            .map(|(ci, ki)| {
+                let ch = &self.doc.channels[ci];
+                (ch.target, ch.keys[ki])
+            })
+            .collect();
+        if keys.is_empty() {
+            return false;
+        }
+        self.key_clipboard = keys;
+        self.status = Some("cinematix.status.keys_copied");
+        true
+    }
+
+    pub(crate) fn can_paste_keys(&self) -> bool {
+        !self.key_clipboard.is_empty()
+            && self
+                .key_clipboard
+                .iter()
+                .all(|(target, _)| self.doc.channel_index(target.node, target.prop).is_some())
+    }
+
+    pub fn paste_keys(&mut self) -> bool {
+        self.can_paste_keys() && self.insert_key_group(&self.key_clipboard.clone(), self.time())
+    }
+
+    pub fn duplicate_keys(&mut self) -> bool {
+        let keys: Vec<_> = self
+            .selected_keys()
+            .into_iter()
+            .map(|(ci, ki)| {
+                let ch = &self.doc.channels[ci];
+                (ch.target, ch.keys[ki])
+            })
+            .collect();
+        let Some(last) = keys.iter().map(|(_, key)| key.t).reduce(f64::max) else {
             return false;
         };
-        self.checkpoint();
-        match self
-            .doc
-            .channels
-            .get_mut(ci)
-            .and_then(|c| c.keys.get_mut(ki))
-        {
-            Some(key) => {
-                key.interp = interp;
-                self.status = Some("cinematix.status.interp");
-                true
-            }
-            None => false,
+        let fps = f64::from(self.fps());
+        let start = ((last * fps + 1e-9).floor() + 1.0) / fps;
+        if !self.insert_key_group(&keys, start) {
+            return false;
         }
+        self.seek(start);
+        true
+    }
+
+    fn insert_key_group(&mut self, keys: &[(PropPath, Key)], start: f64) -> bool {
+        let Some(first) = keys.iter().map(|(_, key)| key.t).reduce(f64::min) else {
+            return false;
+        };
+        let mut tracks = BTreeMap::<usize, Vec<(Key, bool)>>::new();
+        for &(target, mut key) in keys {
+            let Some(ci) = self.doc.channel_index(target.node, target.prop) else {
+                return false;
+            };
+            key.t = start + (key.t - first);
+            if !key.t.is_finite() {
+                return false;
+            }
+            tracks
+                .entry(ci)
+                .or_insert_with(|| {
+                    self.doc.channels[ci]
+                        .keys
+                        .iter()
+                        .map(|&key| (key, false))
+                        .collect()
+                })
+                .push((key, true));
+        }
+        if !self.validate_key_group(&mut tracks) {
+            return false;
+        }
+        self.checkpoint();
+        let selected = self.apply_key_group(tracks);
+        let primary = selected.first().copied();
+        self.selected_channel = primary.map(|(ci, _)| ci);
+        self.select_group(primary, selected);
+        self.status = Some("cinematix.status.keys_pasted");
+        true
+    }
+
+    fn validate_key_group(&mut self, tracks: &mut BTreeMap<usize, Vec<(Key, bool)>>) -> bool {
+        for keys in tracks.values_mut() {
+            keys.sort_by(|a, b| a.0.t.total_cmp(&b.0.t));
+            if keys
+                .windows(2)
+                .any(|w| (w[0].1 || w[1].1) && w[1].0.t - w[0].0.t < 1e-9)
+            {
+                self.status = Some("cinematix.status.key_collision");
+                return false;
+            }
+        }
+        true
+    }
+
+    fn apply_key_group(
+        &mut self,
+        tracks: BTreeMap<usize, Vec<(Key, bool)>>,
+    ) -> BTreeSet<(usize, usize)> {
+        let mut selected = BTreeSet::new();
+        for (ci, keys) in tracks {
+            self.doc.channels[ci].keys = keys
+                .into_iter()
+                .enumerate()
+                .map(|(ki, (key, marked))| {
+                    if marked {
+                        selected.insert((ci, ki));
+                    }
+                    key
+                })
+                .collect();
+        }
+        selected
+    }
+
+    /// Sets the selected keys' outgoing interpolation.
+    pub fn set_selected_interp(&mut self, interp: Interp) -> bool {
+        let keys = self.selected_keys();
+        if keys.is_empty() {
+            return false;
+        }
+        self.checkpoint();
+        for (ci, ki) in keys {
+            self.doc.channels[ci].keys[ki].interp = interp;
+        }
+        self.status = Some("cinematix.status.interp");
+        true
+    }
+
+    pub(crate) fn set_selected_ease(&mut self, ease: Ease) -> bool {
+        let keys = self.selected_keys();
+        if !keys
+            .iter()
+            .any(|&(ci, ki)| self.doc.channels[ci].keys[ki].ease != ease)
+        {
+            return false;
+        }
+        self.checkpoint();
+        for (ci, ki) in keys {
+            self.doc.channels[ci].keys[ki].ease = ease;
+        }
+        self.status = Some("cinematix.status.ease");
+        true
     }
 
     pub fn delete_key(&mut self) -> bool {
-        let Some((ci, ki)) = self.selected_key else {
-            return false;
-        };
-        self.checkpoint();
-        if !self.doc.delete_key(ci, ki) {
+        let keys = self.selected_keys();
+        if keys.is_empty() {
             return false;
         }
-        self.selected_key = self
-            .doc
-            .channels
-            .get(ci)
-            .filter(|c| !c.keys.is_empty())
-            .map(|_| (ci, ki.min(self.doc.channels[ci].keys.len() - 1)));
+        let primary = self.selected_key;
+        let single = keys.len() == 1;
+        self.checkpoint();
+        for (ci, ki) in keys.into_iter().rev() {
+            self.doc.delete_key(ci, ki);
+        }
+        let next = primary.filter(|_| single).and_then(|(ci, ki)| {
+            let count = self.doc.channels[ci].keys.len();
+            (count != 0).then(|| (ci, ki.min(count - 1)))
+        });
+        self.select_only_key(next);
         self.status = Some("cinematix.status.key_deleted");
         true
     }
@@ -888,6 +1123,28 @@ impl Editor {
             return true;
         }
         let f = self.frame();
+        if self.can_record && f.record_control().is_some_and(|r| r.contains(pos.0, pos.1)) {
+            self.request = Some(Request::Record);
+            return true;
+        }
+        if self.can_record
+            && (!self.recording || self.clip_armed)
+            && f.clip_control().is_some_and(|r| r.contains(pos.0, pos.1))
+        {
+            self.request = Some(Request::ArmClip);
+            return true;
+        }
+        if self.spectator_control.is_some()
+            && f.spectator_control()
+                .is_some_and(|r| r.contains(pos.0, pos.1))
+        {
+            self.request = Some(Request::Spectator);
+            return true;
+        }
+        if f.player_control().is_some_and(|r| r.contains(pos.0, pos.1)) {
+            self.show_player = !self.show_player;
+            return true;
+        }
         for (tool, r) in &f.tools {
             if r.contains(pos.0, pos.1) {
                 match tool {
@@ -976,7 +1233,7 @@ impl Editor {
                 let unit = (hi - lo) / f64::from(f.curve_plot.h.max(1.0));
                 self.checkpoint();
                 self.selected_channel = Some(ci);
-                self.selected_key = Some((ci, ki));
+                self.select_only_key(Some((ci, ki)));
                 self.drag = Some(Drag::CurveKey {
                     chan: ci,
                     key: ki,
@@ -1003,6 +1260,10 @@ impl Editor {
         }
         if f.loop_check.contains(pos.0, pos.1) {
             self.looping = !self.looping;
+            return true;
+        }
+        if f.guides_check.w > 0.0 && f.guides_check.contains(pos.0, pos.1) {
+            self.framing_guides = !self.framing_guides;
             return true;
         }
         if f.free_check.contains(pos.0, pos.1) {
@@ -1054,26 +1315,75 @@ impl Editor {
             self.drag = Some(Drag::Playhead);
             return true;
         }
+        if self.tab == crate::frame::TimelineTab::Shots && f.lanes.contains(pos.0, pos.1) {
+            let cameras = self.shot_cameras();
+            if let Some(i) = f
+                .shot_controls(cameras.len() + 2)
+                .position(|r| r.contains(pos.0, pos.1))
+            {
+                match i {
+                    0 => {
+                        self.add_camera_cut();
+                    }
+                    1 => {
+                        self.remove_camera_cut_here();
+                    }
+                    _ => {
+                        self.cut_to_camera(cameras[i - 2]);
+                    }
+                }
+            } else if pos.1 < f.lanes.y + 21.0 && pos.0 >= f.ruler.x {
+                let at = self
+                    .doc
+                    .scene
+                    .meta
+                    .camera_cuts
+                    .iter()
+                    .filter(|cut| (f.axis.x(cut.at) - pos.0).abs() <= 7.0)
+                    .min_by(|a, b| {
+                        (f.axis.x(a.at) - pos.0)
+                            .abs()
+                            .total_cmp(&(f.axis.x(b.at) - pos.0).abs())
+                    })
+                    .map(|cut| cut.at);
+                if let Some(at) = at {
+                    self.seek(at);
+                    self.playing = false;
+                }
+            }
+            return true;
+        }
         for row in &f.rows {
             if row.label.contains(pos.0, pos.1) {
                 self.selected_channel = Some(row.chan);
-                self.selected_key = None;
+                self.select_only_key(None);
                 return true;
             }
             if row.keys.contains(pos.0, pos.1) {
                 self.selected_channel = Some(row.chan);
-                self.selected_key = None;
-                if let Some(ch) = self.doc.channels.get(row.chan) {
-                    let times: Vec<f64> = ch.keys.iter().map(|k| k.t).collect();
-                    if let Some(ki) = cinematix_timeline::hit_key(pos.0, &f.axis, &times, 6.0) {
-                        let grab = f.axis.t(pos.0) - ch.keys[ki].t;
-                        self.selected_key = Some((row.chan, ki));
-                        self.drag = Some(Drag::Key {
-                            chan: row.chan,
-                            key: ki,
-                            grab_dt: grab,
-                        });
+                let ch = &self.doc.channels[row.chan];
+                let times: Vec<_> = ch.keys.iter().map(|k| k.t).collect();
+                if let Some(ki) = cinematix_timeline::hit_key(pos.0, &f.axis, &times, 6.0) {
+                    let hit = (row.chan, ki);
+                    let grab_dt = f.axis.t(pos.0) - times[ki];
+                    let mut keys = self.selected_keys();
+                    if mods.shift && !keys.insert(hit) {
+                        keys.remove(&hit);
+                        self.select_group(keys.first().copied(), keys);
+                        return true;
                     }
+                    if !mods.shift && !keys.contains(&hit) {
+                        keys = BTreeSet::from([hit]);
+                    }
+                    self.select_group(Some(hit), keys);
+                    self.drag = Some(Drag::Key {
+                        chan: row.chan,
+                        key: ki,
+                        grab_dt,
+                        changed: false,
+                    });
+                } else if !mods.shift {
+                    self.select_only_key(None);
                 }
                 return true;
             }
@@ -1112,14 +1422,20 @@ impl Editor {
                 let (min, max, step) = field.range();
                 let track = (r.w - 8.0).max(1.0);
                 let frac = f64::from((pos.0 - r.x - 4.0) / track);
-                let scrub = cinematix_ui::Scrubber::new(field.get(&self.doc), min, max, step);
+                let scrub = cinematix_ui::Scrubber::new(
+                    field.get_for(&self.doc, self.active_camera()),
+                    min,
+                    max,
+                    step,
+                );
                 self.checkpoint();
                 if *field != Field::FilmLength {
-                    field.set(&mut self.doc, scrub.quantise(scrub.from_frac(frac)));
+                    let camera = self.active_camera();
+                    field.set_for(&mut self.doc, camera, scrub.quantise(scrub.from_frac(frac)));
                 }
                 self.drag = Some(Drag::Number {
                     field: *field,
-                    start: field.get(&self.doc),
+                    start: field.get_for(&self.doc, self.active_camera()),
                     start_x: pos.0,
                 });
                 return true;
@@ -1139,6 +1455,7 @@ impl Editor {
                         | crate::frame::Axis::PositionZ => f64::from(base_pos[axis.component()]),
                         crate::frame::Axis::Yaw => f64::from(view_from_rotation(base_rot).0),
                         crate::frame::Axis::Pitch => f64::from(view_from_rotation(base_rot).1),
+                        crate::frame::Axis::Roll => f64::from(roll_from_rotation(base_rot)),
                     };
                     self.drag = Some(Drag::CameraAxis {
                         axis: *axis,
@@ -1282,13 +1599,26 @@ impl Editor {
                 self.scrub_to(f.axis.t(pos.0), !mods.alt);
                 true
             }
-            Drag::Key { chan, key, grab_dt } => {
-                let Some(ch) = self.doc.channels.get(chan) else {
-                    return false;
-                };
-                let times: Vec<f64> = ch.keys.iter().map(|k| k.t).collect();
-                let raw = (f.axis.t(pos.0) - grab_dt).max(0.0);
-                let tol = 6.0 / f.axis.px_per_sec().max(1e-9);
+            Drag::Key {
+                chan,
+                key,
+                grab_dt,
+                changed,
+            } => {
+                let anchor = self.doc.channels[chan].keys[key].t;
+                let raw = f.axis.t(pos.0) - grab_dt;
+                if !raw.is_finite()
+                    || (!changed && (raw - anchor).abs() * f.axis.px_per_sec() < 2.0)
+                {
+                    return true;
+                }
+                let keys = self.selected_keys();
+                let times: Vec<_> = self.doc.channels[chan]
+                    .keys
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, k)| (!keys.contains(&(chan, i))).then_some(k.t))
+                    .collect();
                 let t = if mods.alt {
                     raw
                 } else {
@@ -1296,20 +1626,80 @@ impl Editor {
                         raw,
                         self.fps(),
                         &times,
-                        tol,
+                        6.0 / f.axis.px_per_sec().max(1e-9),
                         Snap {
                             frames: true,
-                            keys: true,
+                            keys: keys.len() == 1,
                             markers: false,
                         },
                     )
                 };
-                if let Some(new) = self.doc.move_key(chan, key, t) {
-                    self.selected_key = Some((chan, new));
-                    if let Some(Drag::Key { key, .. }) = self.drag.as_mut() {
-                        *key = new;
-                    }
+                let Some(first) = keys
+                    .iter()
+                    .map(|&(ci, ki)| self.doc.channels[ci].keys[ki].t)
+                    .reduce(f64::min)
+                else {
+                    return true;
+                };
+                let delta = (t - anchor).max(-first.max(0.0));
+                if delta.abs() < 1e-9 {
+                    return true;
                 }
+                let mut tracks = BTreeMap::<usize, Vec<(Key, bool)>>::new();
+                for &(ci, _) in &keys {
+                    tracks.entry(ci).or_insert_with(|| {
+                        self.doc.channels[ci]
+                            .keys
+                            .iter()
+                            .enumerate()
+                            .map(|(ki, &k)| {
+                                let selected = keys.contains(&(ci, ki));
+                                (
+                                    Key {
+                                        t: if selected { k.t + delta } else { k.t },
+                                        ..k
+                                    },
+                                    selected,
+                                )
+                            })
+                            .collect()
+                    });
+                }
+                if keys.len() > 1 && !self.validate_key_group(&mut tracks) {
+                    return true;
+                }
+                if keys.len() == 1 {
+                    // Preserve the original single-key drag behavior, including key snapping.
+                    if !changed {
+                        self.checkpoint();
+                    }
+                    if let Some(ki) = self.doc.move_key(chan, key, anchor + delta) {
+                        self.select_only_key(Some((chan, ki)));
+                        self.drag = Some(Drag::Key {
+                            chan,
+                            key: ki,
+                            grab_dt,
+                            changed: true,
+                        });
+                    }
+                    return true;
+                }
+                if !changed {
+                    self.checkpoint();
+                }
+                let selected = self.apply_key_group(tracks);
+                let ki = self.doc.channels[chan]
+                    .keys
+                    .iter()
+                    .position(|k| k.t == anchor + delta)
+                    .expect("the moved anchor is in the validated group");
+                self.select_group(Some((chan, ki)), selected);
+                self.drag = Some(Drag::Key {
+                    chan,
+                    key: ki,
+                    grab_dt,
+                    changed: true,
+                });
                 true
             }
             Drag::Number {
@@ -1319,7 +1709,8 @@ impl Editor {
             } => {
                 let (min, max, step) = field.range();
                 let scrub = cinematix_ui::Scrubber::new(start, min, max, step);
-                field.set(&mut self.doc, scrub.drag(pos.0 - start_x, mods));
+                let camera = self.active_camera();
+                field.set_for(&mut self.doc, camera, scrub.drag(pos.0 - start_x, mods));
                 if field == Field::FilmLength {
                     self.seek_in_place(self.time());
                 }
@@ -1376,17 +1767,21 @@ impl Editor {
                 if axis.is_position() {
                     let mut p = base_pos;
                     p[axis.component()] = value as f32;
-                    let id = self.doc.scene.camera;
+                    let id = self.active_camera();
                     let t = self.playhead.t;
                     match self.doc.channel_index(id, Prop::Translation) {
                         Some(ci) if !self.doc.channels[ci].keys.is_empty() => self
                             .doc
                             .upsert_key(ci, t, Value::Vec3(p.to_array()))
                             .is_some(),
-                        _ => self.doc.set_camera_translation(p),
+                        _ => self.doc.scene.nodes.get_mut(&id).is_some_and(|n| {
+                            n.rest.translation = p;
+                            true
+                        }),
                     }
                 } else {
                     let (mut yaw, mut pitch) = view_from_rotation(base_rot);
+                    let mut roll = roll_from_rotation(base_rot);
                     match axis {
                         crate::frame::Axis::Yaw => {
                             while value > 180.0 {
@@ -1398,17 +1793,22 @@ impl Editor {
                             yaw = value as f32;
                         }
                         crate::frame::Axis::Pitch => pitch = value as f32,
+                        crate::frame::Axis::Roll => roll = value as f32,
                         _ => {}
                     }
-                    let rot = rotation_from_view(yaw, pitch);
-                    let id = self.doc.scene.camera;
+                    let rot =
+                        rotation_from_view(yaw, pitch) * Quat::from_rotation_z(roll.to_radians());
+                    let id = self.active_camera();
                     let t = self.playhead.t;
                     match self.doc.channel_index(id, Prop::Rotation) {
                         Some(ci) if !self.doc.channels[ci].keys.is_empty() => self
                             .doc
                             .upsert_key(ci, t, Value::Quat(rot.to_array()))
                             .is_some(),
-                        _ => self.doc.set_camera_rotation(rot),
+                        _ => self.doc.scene.nodes.get_mut(&id).is_some_and(|n| {
+                            n.rest.rotation = rot;
+                            true
+                        }),
                     }
                 }
             }
@@ -1562,6 +1962,7 @@ impl Editor {
         self.doc.channels[ti].keys = points
             .iter()
             .map(|(t, p, _)| cinematix_anim::Key {
+                ease: Default::default(),
                 t: *t,
                 v: Value::Vec3(p.to_array()),
                 interp: Interp::Spline,
@@ -1571,6 +1972,7 @@ impl Editor {
             self.doc.channels[ri].keys = points
                 .iter()
                 .map(|(t, _, q)| cinematix_anim::Key {
+                    ease: Default::default(),
                     t: *t,
                     v: Value::Quat(q.to_array()),
                     interp: Interp::Spline,
@@ -1578,7 +1980,7 @@ impl Editor {
                 .collect();
         }
         self.selected_channel = Some(ti);
-        self.selected_key = Some((ti, 0));
+        self.select_only_key(Some((ti, 0)));
         self.seek(points[0].0);
         self.status = Some("cinematix.status.path");
         true
@@ -1652,10 +2054,110 @@ impl Editor {
         self.write_camera_path(&poses, true)
     }
 
+    pub fn shot_cameras(&self) -> Vec<cinematix_scene::NodeId> {
+        self.doc
+            .nodes_of(|kind| matches!(kind, cinematix_scene::NodeKind::Camera(_)))
+    }
+
+    pub fn active_camera(&self) -> cinematix_scene::NodeId {
+        self.doc.camera_at_time(self.time())
+    }
+
+    /// Create a new camera at the current viewport pose and cut to it here.
+    pub fn add_camera_cut(&mut self) -> bool {
+        let Some((eye, _, _)) = self.preview_view() else {
+            return false;
+        };
+        let Some(rotation) = self.preview_rotation() else {
+            return false;
+        };
+        let Some(id) = self
+            .doc
+            .scene
+            .nodes
+            .keys()
+            .map(|id| id.0)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+        else {
+            return false;
+        };
+        let mut data = crate::document::camera_data();
+        data.fov_deg = self.preview_fov();
+        let mut node = crate::document::new_node(id, cinematix_scene::NodeKind::Camera(data));
+        node.name = format!(
+            "Camera {}",
+            self.doc
+                .nodes_of(|kind| matches!(kind, cinematix_scene::NodeKind::Camera(_)))
+                .len()
+                + 1
+        );
+        node.rest.translation = Vec3::from_array(eye.map(|v| v as f32));
+        node.rest.rotation = rotation;
+        let id = node.id;
+        self.checkpoint();
+        self.doc.scene.nodes.insert(id, node);
+        self.doc.scene.roots.push(id);
+        self.doc.sync_channels();
+        self.put_cut(id);
+        self.select_only_key(None);
+        self.selected_channel = self.doc.channel_index(id, Prop::Translation);
+        true
+    }
+
+    pub fn cut_to_camera(&mut self, id: cinematix_scene::NodeId) -> bool {
+        if !self
+            .doc
+            .node(id)
+            .is_some_and(|n| matches!(n.kind, cinematix_scene::NodeKind::Camera(_)))
+            || id == self.active_camera()
+        {
+            return false;
+        }
+        self.checkpoint();
+        self.put_cut(id);
+        self.select_only_key(None);
+        self.selected_channel = self.doc.channel_index(id, Prop::Translation);
+        true
+    }
+
+    fn put_cut(&mut self, camera: cinematix_scene::NodeId) {
+        let at = self.time();
+        let cuts = &mut self.doc.scene.meta.camera_cuts;
+        cuts.retain(|cut| cut.at != at);
+        cuts.push(cinematix_scene::CameraCut { at, camera });
+        cuts.sort_by(|a, b| a.at.total_cmp(&b.at));
+    }
+
+    pub fn remove_camera_cut_here(&mut self) -> bool {
+        let at = self.time();
+        if !self
+            .doc
+            .scene
+            .meta
+            .camera_cuts
+            .iter()
+            .any(|cut| cut.at == at)
+        {
+            return false;
+        }
+        self.checkpoint();
+        self.doc.scene.meta.camera_cuts.retain(|cut| cut.at != at);
+        self.select_only_key(None);
+        self.selected_channel = self
+            .doc
+            .channel_index(self.active_camera(), Prop::Translation);
+        true
+    }
+
     /// The camera node's pose at `t`: the animated value when the channel holds keys, the rest
     /// value otherwise.
     pub fn camera_at(&self, t: f64) -> Option<(Vec3, Quat)> {
-        let id = self.doc.scene.camera;
+        self.camera_pose(self.doc.camera_at_time(t), t)
+    }
+
+    pub fn camera_pose(&self, id: cinematix_scene::NodeId, t: f64) -> Option<(Vec3, Quat)> {
         let node = self.doc.node(id)?;
         let mut position = node.rest.translation;
         let mut rotation = node.rest.rotation;
@@ -1719,20 +2221,24 @@ impl Editor {
             crate::frame::Axis::PositionZ => f64::from(position.z),
             crate::frame::Axis::Yaw => f64::from(view_from_rotation(rotation).0),
             crate::frame::Axis::Pitch => f64::from(view_from_rotation(rotation).1),
+            crate::frame::Axis::Roll => f64::from(roll_from_rotation(rotation)),
         }
     }
 
     /// The camera's field of view at `t`.
     pub fn fov_at(&self, t: f64) -> f32 {
-        let id = self.doc.scene.camera;
+        self.camera_fov(self.doc.camera_at_time(t), t)
+    }
+
+    pub fn camera_fov(&self, id: cinematix_scene::NodeId, t: f64) -> f32 {
         if let Some(ci) = self.doc.channel_index(id, Prop::Fov)
             && let Some(Value::F32(v)) = self.doc.value_at(ci, t)
         {
             return v;
         }
-        match self.doc.camera_data() {
-            Some(c) => c.fov_deg,
-            None => 70.0,
+        match self.doc.node(id).map(|node| &node.kind) {
+            Some(cinematix_scene::NodeKind::Camera(c)) => c.fov_deg,
+            _ => 70.0,
         }
     }
 
@@ -1755,7 +2261,7 @@ impl Editor {
     pub fn bend_segment(&self) -> Option<(f64, f64)> {
         let channel = self
             .doc
-            .channel_index(self.doc.scene.camera, Prop::Translation)?;
+            .channel_index(self.active_camera(), Prop::Translation)?;
         let channel = &self.doc.channels[channel];
         if channel.muted || channel.keys.len() < 2 {
             return None;
@@ -1772,7 +2278,7 @@ impl Editor {
     /// Midpoints of all editable camera path segments, independent of the playhead.
     pub fn camera_bend_handles(&self) -> impl Iterator<Item = ((f64, f64), Vec3)> + '_ {
         self.doc
-            .channel_index(self.doc.scene.camera, Prop::Translation)
+            .channel_index(self.active_camera(), Prop::Translation)
             .map(|ci| &self.doc.channels[ci])
             .filter(|channel| !channel.muted)
             .into_iter()
@@ -1782,7 +2288,12 @@ impl Editor {
                 if b - a < 1e-9 || !a.is_finite() || !b.is_finite() {
                     return None;
                 }
-                let midpoint = self.camera_at(a + (b - a) * 0.5)?.0;
+                let midpoint = self
+                    .camera_pose(
+                        self.active_camera(),
+                        a + (b - a) * keys[0].ease.midpoint_time_fraction(),
+                    )?
+                    .0;
                 Some(((a, b), midpoint))
             })
     }
@@ -1793,17 +2304,19 @@ impl Editor {
         let Some((a, b)) = self.bend_segment() else {
             return false;
         };
-        let Some((start, _)) = self.camera_at(a) else {
+        let Some((start, _)) = self.camera_pose(self.active_camera(), a) else {
             return false;
         };
-        let Some((end, _)) = self.camera_at(b) else {
+        let Some((end, _)) = self.camera_pose(self.active_camera(), b) else {
             return false;
         };
-        let Some((center, _)) = self.camera_at(a + (b - a) * 0.5) else {
+        let Some((center, _)) = self.camera_pose(self.active_camera(), a + (b - a) * 0.5) else {
             return false;
         };
         let radius = (0..=16)
-            .filter_map(|i| self.camera_at(a + (b - a) * f64::from(i) / 16.0))
+            .filter_map(|i| {
+                self.camera_pose(self.active_camera(), a + (b - a) * f64::from(i) / 16.0)
+            })
             .map(|(p, _)| p.distance(center))
             .fold(0.0_f32, f32::max)
             .max(1.0);
@@ -1848,6 +2361,7 @@ impl Editor {
         self.preview_free = true;
         self.free_pos = eye;
         (self.free_yaw, self.free_pitch) = (yaw, pitch);
+        self.free_roll = 0.0;
         self.playing = false;
         true
     }
@@ -1855,7 +2369,7 @@ impl Editor {
     pub fn bend_camera_segment(&mut self, segment: (f64, f64), midpoint: Vec3) {
         let Some(ci) = self
             .doc
-            .channel_index(self.doc.scene.camera, Prop::Translation)
+            .channel_index(self.active_camera(), Prop::Translation)
         else {
             return;
         };
@@ -1874,7 +2388,7 @@ impl Editor {
     }
 
     pub fn camera_path_times(&self) -> Vec<f64> {
-        let id = self.doc.scene.camera;
+        let id = self.active_camera();
         let Some(ci) = self.doc.channel_index(id, Prop::Translation) else {
             return Vec::new();
         };
@@ -1887,7 +2401,7 @@ impl Editor {
     /// The selected key's time when it is a camera position key, for the overlay's red marker.
     pub fn selected_camera_key_time(&self) -> Option<f64> {
         let (ci, ki) = self.selected_key?;
-        let id = self.doc.scene.camera;
+        let id = self.active_camera();
         let position = self.doc.channel_index(id, Prop::Translation)?;
         if ci != position {
             return None;
@@ -1906,12 +2420,27 @@ impl Editor {
             let (yaw, pitch) = view_from_rotation(rotation);
             self.free_yaw = yaw;
             self.free_pitch = pitch;
+            self.free_roll = roll_from_rotation(rotation);
+        }
+    }
+
+    fn free_orientation(&self) -> Quat {
+        rotation_from_view(self.free_yaw, self.free_pitch)
+            * Quat::from_rotation_z(self.free_roll.to_radians())
+    }
+
+    pub fn preview_roll(&self) -> f32 {
+        if self.preview_free {
+            self.free_roll
+        } else {
+            self.camera_at(self.time())
+                .map_or(0.0, |(_, rotation)| roll_from_rotation(rotation))
         }
     }
 
     pub fn preview_rotation(&self) -> Option<Quat> {
         if self.preview_free {
-            return Some(rotation_from_view(self.free_yaw, self.free_pitch));
+            return Some(self.free_orientation());
         }
         self.camera_at(self.playhead.t)
             .map(|(_, rotation)| rotation)
@@ -1997,7 +2526,8 @@ impl Editor {
             None => return false,
         };
         let (yaw, pitch) = view_from_rotation(rotation);
-        let rotation = rotation_from_view(yaw + dyaw, pitch + dpitch);
+        let rotation = rotation_from_view(yaw + dyaw, pitch + dpitch)
+            * Quat::from_rotation_z(roll_from_rotation(rotation).to_radians());
         match self.doc.channel_index(id, Prop::Rotation) {
             Some(ci) if !self.doc.channels[ci].keys.is_empty() => self
                 .doc
@@ -2040,11 +2570,13 @@ impl Editor {
     pub fn adopt_document(&mut self, doc: Document) {
         self.checkpoint();
         self.doc = doc;
+        self.extra_keys.clear();
+        self.drag = None;
         self.playhead.fps = self.doc.scene.meta.fps.round().max(1.0);
         self.seek_in_place(self.playhead.t);
         self.fit();
         self.selected_channel = None;
-        self.selected_key = None;
+        self.select_only_key(None);
         self.selected_node = None;
         self.scroll = 0;
     }
@@ -2083,6 +2615,14 @@ pub fn view_from_rotation(q: Quat) -> (f32, f32) {
     (yaw, (-x.to_degrees()).clamp(-89.9, 89.9))
 }
 
+fn roll_from_rotation(rotation: Quat) -> f32 {
+    rotation
+        .normalize()
+        .to_euler(glam::EulerRot::YXZ)
+        .2
+        .to_degrees()
+}
+
 /// The view angles that look from `from` at `to`, in Minecraft's yaw (0 looks +Z) and pitch
 /// (positive looks down).
 pub fn look_at(from: Vec3, to: Vec3) -> (f32, f32) {
@@ -2111,6 +2651,28 @@ mod tests {
         let mut e = Editor::new();
         e.resize(1280.0, 720.0);
         e
+    }
+
+    #[test]
+    fn shots_cut_instantly_and_undo_without_changing_the_original_camera() {
+        let mut e = editor();
+        let first = e.active_camera();
+        e.seek(2.0);
+        e.toggle_free_view();
+        e.free_nudge(Vec3::new(8.0, 3.0, 0.0));
+        assert!(e.add_camera_cut());
+        let second = e.active_camera();
+        assert_ne!(first, second);
+        assert_eq!(e.camera_at(1.99).unwrap().0, Vec3::ZERO);
+        assert_eq!(e.camera_at(2.0).unwrap().0, Vec3::new(8.0, 3.0, 0.0));
+        e.seek(4.0);
+        assert!(e.cut_to_camera(first));
+        assert_eq!(e.camera_at(4.0).unwrap().0, Vec3::ZERO);
+        assert!(e.undo());
+        assert_eq!(e.active_camera(), second);
+        e.seek(2.0);
+        assert!(e.remove_camera_cut_here());
+        assert_eq!(e.active_camera(), first);
     }
 
     #[test]
@@ -2361,6 +2923,76 @@ mod tests {
         e.drag_to((f.axis.x(3.0), row.keys.y + 4.0), Mods::default());
         let key = e.doc.channels[ci].keys[0];
         assert!((key.t - 3.0).abs() < 0.05, "{}", key.t);
+    }
+
+    #[test]
+    fn selecting_and_dragging_across_tracks_keeps_the_shot_together() {
+        let mut e = editor();
+        let camera = e.doc.scene.camera;
+        let pos = e.doc.channel_index(camera, Prop::Translation).unwrap();
+        let rot = e.doc.channel_index(camera, Prop::Rotation).unwrap();
+        e.doc.upsert_key(pos, 1.0, Value::Vec3([2.0, 3.0, 4.0]));
+        e.doc
+            .upsert_key(rot, 2.0, Value::Quat([0.0, 0.0, 0.0, 1.0]));
+        let f = e.frame();
+        let y = |ci| f.rows.iter().find(|row| row.chan == ci).unwrap().keys.y + 4.0;
+        assert!(e.press((f.axis.x(1.0), y(pos)), Mods::default()));
+        e.release((0.0, 0.0));
+        assert!(e.press(
+            (f.axis.x(2.0), y(rot)),
+            Mods {
+                shift: true,
+                ..Mods::default()
+            }
+        ));
+        e.release((0.0, 0.0));
+        assert!(!e.can_undo(), "selecting is not an edit");
+        assert!(e.press((f.axis.x(1.0), y(pos)), Mods::default()));
+        e.drag_to((f.axis.x(3.0), y(pos)), Mods::default());
+        e.drag_to((f.axis.x(4.0), y(pos)), Mods::default());
+        e.release((0.0, 0.0));
+        assert_eq!(e.doc.channels[pos].keys[0].t, 4.0);
+        assert_eq!(e.doc.channels[rot].keys[0].t, 5.0);
+        assert!(e.undo());
+        assert_eq!(e.doc.channels[pos].keys[0].t, 1.0);
+        assert_eq!(e.doc.channels[rot].keys[0].t, 2.0);
+        assert!(!e.can_undo(), "one drag makes one undo step");
+    }
+
+    #[test]
+    fn copy_and_duplicate_keep_track_spacing_and_never_overwrite() {
+        let mut e = editor();
+        let ci = e.active_channel().unwrap();
+        for t in [1.0, 2.0] {
+            e.doc.insert_key(ci, t).unwrap();
+        }
+        e.doc.channels[ci].keys[0].interp = Interp::Quadratic {
+            midpoint_offset: [0.0, 1.0, 0.0],
+        };
+        e.select_group(Some((ci, 0)), BTreeSet::from([(ci, 0), (ci, 1)]));
+        assert!(e.copy_keys());
+        e.seek(1.0);
+        assert!(!e.paste_keys());
+        assert!(!e.can_undo());
+        assert_eq!(e.doc.key_count(), 2);
+        e.seek(5.0);
+        assert!(e.paste_keys());
+        assert_eq!(e.doc.channels[ci].keys[2].t, 5.0);
+        assert_eq!(e.doc.channels[ci].keys[3].t, 6.0);
+        assert_eq!(
+            e.doc.channels[ci].keys[2].interp,
+            e.doc.channels[ci].keys[0].interp
+        );
+        assert!(e.duplicate_keys());
+        assert_eq!(e.doc.channels[ci].keys[4].t, 6.0 + 1.0 / 24.0);
+        assert_eq!(
+            e.doc.channels[ci].keys[5].t - e.doc.channels[ci].keys[4].t,
+            1.0
+        );
+        assert!(e.delete_key());
+        assert_eq!(e.doc.key_count(), 4);
+        assert!(e.undo());
+        assert_eq!(e.doc.key_count(), 6);
     }
 
     #[test]
@@ -2919,6 +3551,32 @@ mod tests {
         assert!(e.rail(&pts, 48));
         assert_eq!(e.doc.channels[ci].keys.len(), 3);
         assert!((e.doc.channels[ci].keys[2].t - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn roll_survives_free_view_and_explicit_capture() {
+        let mut e = editor();
+        let rotation = rotation_from_view(30.0, -12.0) * Quat::from_rotation_z(0.5);
+        e.doc.set_camera_rotation(rotation);
+        assert!((e.preview_roll() - 0.5_f32.to_degrees()).abs() < 1e-4);
+        e.toggle_free_view();
+        assert!(e.preview_rotation().unwrap().dot(rotation).abs() > 0.99999);
+        e.free_look(4.0, 5.0);
+        let free = e.preview_rotation().unwrap();
+        assert!(e.add_key());
+        e.toggle_free_view();
+        assert!(e.preview_rotation().unwrap().dot(free).abs() > 0.99999);
+        assert!((e.preview_roll() - 0.5_f32.to_degrees()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn guides_toggle_without_editing_the_film() {
+        let mut e = editor();
+        let r = e.frame().guides_check;
+        assert!(r.w > 0.0);
+        assert!(e.press((r.x + 4.0, r.y + 4.0), Mods::default()));
+        assert!(e.framing_guides);
+        assert!(!e.can_undo());
     }
 
     #[test]

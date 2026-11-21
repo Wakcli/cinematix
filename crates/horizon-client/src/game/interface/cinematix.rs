@@ -81,7 +81,157 @@ fn section_named(name: &str) -> Option<Section> {
     Section::ALL.into_iter().find(|s| s.name() == name)
 }
 
+pub(super) struct SpectatorReturn {
+    session: u64,
+    dim: super::Dim,
+    position: glam::DVec3,
+    teleport: String,
+    mode_command: String,
+    mode: i32,
+    stage: SpectatorStage,
+}
+
+#[derive(Clone, Copy)]
+enum SpectatorStage {
+    Entering(std::time::Instant),
+    Flying,
+    Returning(std::time::Instant, u64),
+    Restoring(std::time::Instant),
+}
+
 impl Game<'_> {
+    fn cinematix_command_available(&self, command: &str) -> bool {
+        self.chat_abilities().allows(&format!("/{command}"))
+            && self.remote.as_ref().is_some_and(|r| {
+                r.chat_tree_received && r.chat_tree.parse(command, &self.ui.registries).is_valid()
+            })
+    }
+
+    fn toggle_cinematix_spectator(&mut self) {
+        let Some(remote) = self
+            .remote
+            .as_ref()
+            .filter(|_| self.replay.driver.is_none())
+        else {
+            return;
+        };
+        let session = remote.session.serial();
+        let now = std::time::Instant::now();
+        if let Some(state) = self.cinematix_spectator.as_ref() {
+            if state.session != session || !matches!(state.stage, SpectatorStage::Flying) {
+                return;
+            }
+            let teleport = state.teleport.clone();
+            let receipt = remote.teleport_receipts;
+            if self.cinematix_command_available(&teleport)
+                && self.cinematix_command_available(&state.mode_command)
+            {
+                self.send_command(&teleport);
+                self.cinematix_spectator.as_mut().unwrap().stage =
+                    SpectatorStage::Returning(now, receipt);
+            } else {
+                self.system_message(Text::tr("cinematix.spectator.permission", &[]));
+            }
+            return;
+        }
+        let Some(player) = self.player.as_ref().filter(|_| self.riding.is_none()) else {
+            return;
+        };
+        let mode = self.mode_id();
+        let name = match mode {
+            0 => "survival",
+            1 => "creative",
+            2 => "adventure",
+            _ => return,
+        };
+        let position = glam::DVec3::new(player.position.x, player.position.y, player.position.z);
+        let dim = self.dim;
+        let (yaw, pitch) = (self.yaw, self.pitch);
+        if !position.is_finite() || !yaw.is_finite() || !pitch.is_finite() {
+            return;
+        }
+        let teleport = format!(
+            "execute in {} run teleport @s {:.9} {:.9} {:.9} {:.6} {:.6}",
+            dim.id(),
+            position.x,
+            position.y,
+            position.z,
+            yaw,
+            pitch
+        );
+        let mode_command = format!("gamemode {name}");
+        let enter = "gamemode spectator";
+        if ![enter, &teleport, &mode_command]
+            .into_iter()
+            .all(|cmd| self.cinematix_command_available(cmd))
+        {
+            self.system_message(Text::tr("cinematix.spectator.permission", &[]));
+            return;
+        }
+        self.cinematix_spectator = Some(SpectatorReturn {
+            session,
+            dim,
+            position,
+            teleport,
+            mode_command,
+            mode,
+            stage: SpectatorStage::Entering(now),
+        });
+        self.send_command(enter);
+    }
+
+    fn tick_cinematix_spectator(&mut self) {
+        let Some(mut state) = self.cinematix_spectator.take() else {
+            return;
+        };
+        if !self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.session.serial() == state.session)
+        {
+            return;
+        }
+        let mode = self.mode_id();
+        match state.stage {
+            SpectatorStage::Entering(_) if mode == 3 => {
+                state.stage = SpectatorStage::Flying;
+                self.close_cinematix_screen();
+                self.system_message(Text::tr("cinematix.spectator.flying", &[]));
+            }
+            SpectatorStage::Entering(at) if at.elapsed() > Duration::from_secs(5) => {
+                self.system_message(Text::tr("cinematix.spectator.timeout", &[]));
+                return;
+            }
+            SpectatorStage::Returning(_, receipt)
+                if self.remote.as_ref().is_some_and(|r| {
+                    r.teleport_receipts != receipt && !r.level_load.is_active()
+                }) && self.dim == state.dim
+                    && self.player.as_ref().is_some_and(|p| {
+                        glam::DVec3::new(p.position.x, p.position.y, p.position.z)
+                            .distance(state.position)
+                            < 0.001
+                    })
+                    && !self.remote_loading()
+                    && self.cinematix_command_available(&state.mode_command) =>
+            {
+                self.send_command(&state.mode_command);
+                state.stage = SpectatorStage::Restoring(std::time::Instant::now());
+            }
+            SpectatorStage::Restoring(_) if mode == state.mode => {
+                self.system_message(Text::tr("cinematix.spectator.returned", &[]));
+                return;
+            }
+            SpectatorStage::Returning(at, _) | SpectatorStage::Restoring(at)
+                if at.elapsed() > Duration::from_secs(8) =>
+            {
+                state.stage = SpectatorStage::Flying;
+                self.system_message(Text::tr("cinematix.spectator.timeout", &[]));
+            }
+            _ => {}
+        }
+        self.cinematix_spectator = Some(state);
+    }
+
     /// Whether the editor is up.
     pub(super) fn cinematix_open(&self) -> bool {
         self.screen == Screen::Cinematix
@@ -103,6 +253,16 @@ impl Game<'_> {
         self.screen = Screen::Cinematix;
         let position = Vec3::new(pose.0[0] as f32, pose.0[1] as f32, pose.0[2] as f32);
         self.cinematix.take_pose(position, pose.1, pose.2, false);
+        self.cinematix.replay_duration = None;
+        if self.replay.standalone
+            && let Some(driver) = self.replay.driver.as_mut()
+        {
+            driver.set_paused(true);
+            self.cinematix.replay_duration = Some(f64::from(driver.duration_ms()) / 1000.0);
+            self.cinematix
+                .seek(f64::from(driver.position_ms()) / 1000.0);
+            self.cinematix.fit();
+        }
         self.cinematix_look = None;
         self.cinematix_bend = None;
         let _ = self.sync_cinematix_world();
@@ -119,6 +279,7 @@ impl Game<'_> {
     pub(super) fn close_cinematix_screen(&mut self) {
         if self.screen == Screen::Cinematix {
             self.cinematix.playing = false;
+            self.cinematix.replay_duration = None;
             self.cinematix_look = None;
             self.cinematix_bend = None;
             self.clear_cinematix_world();
@@ -140,9 +301,69 @@ impl Game<'_> {
         if self.screen != Screen::Cinematix {
             return;
         }
+        self.cinematix.can_record = self.remote.is_some() && self.replay.driver.is_none();
+        self.cinematix.recording = self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.session.is_recording());
+        self.cinematix.clip_armed = self.cinematix_clip.as_ref().is_some_and(|path| {
+            self.remote
+                .as_ref()
+                .and_then(|r| r.session.recorder_status())
+                .is_some_and(|status| &status.path == path)
+        });
+        self.cinematix.spectator_control = if self.remote.is_some() && self.replay.driver.is_none()
+        {
+            match self.cinematix_spectator.as_ref().map(|s| s.stage) {
+                Some(SpectatorStage::Flying) => Some("cinematix.spectator.return"),
+                Some(_) => Some("cinematix.spectator.wait"),
+                None if !self.spectator() => Some("cinematix.spectator.enter"),
+                None => None,
+            }
+        } else {
+            None
+        };
         self.cinematix.resize(batch.width, batch.height);
         self.draw_cinematix_path(batch);
         cinematix_editor::draw(&self.cinematix, batch, &self.gui.atlas, self.cursor);
+    }
+
+    pub(super) fn save_armed_cinematix_clip(&mut self) -> bool {
+        let Some(path) = self.cinematix_clip.take() else {
+            return false;
+        };
+        if !self
+            .remote
+            .as_ref()
+            .and_then(|r| r.session.recorder_status())
+            .is_some_and(|status| status.path == path)
+        {
+            return false;
+        }
+        let result = self.stop_studio_recording();
+        self.report_cinematix_recording(result, true);
+        true
+    }
+
+    fn report_cinematix_recording(&mut self, result: Result<Value>, stopping: bool) {
+        match result {
+            Ok(reply) if reply["ok"].as_bool() == Some(true) => {
+                let key = if stopping {
+                    "horizon.studio.record.saved"
+                } else {
+                    "horizon.studio.record.started"
+                };
+                self.system_message(Text::tr(
+                    key,
+                    &[&reply["path"].as_str().unwrap_or_default()],
+                ));
+            }
+            Ok(reply) => self.system_message(Text::tr(
+                "horizon.studio.record.error",
+                &[&reply["error"].as_str().unwrap_or_default()],
+            )),
+            Err(err) => self.system_message(Text::tr("horizon.studio.record.error", &[&err])),
+        }
     }
 
     /// A key while the editor is up: the editor's shortcuts, and nothing reaches the world.
@@ -151,13 +372,32 @@ impl Game<'_> {
             return;
         }
         if key == KeyCode::F8 {
-            self.close_cinematix_screen();
+            if !self.save_armed_cinematix_clip() {
+                self.close_cinematix_screen();
+            }
             return;
         }
-        let Some(editor_key) = editor_key(key) else {
-            return;
-        };
         let mods = self.cinematix_mods();
+        if self.cinematix.dragging() {
+            return;
+        }
+        if mods.ctrl {
+            match key {
+                KeyCode::KeyC => {
+                    self.cinematix.copy_keys();
+                    return;
+                }
+                KeyCode::KeyV => {
+                    self.cinematix.paste_keys();
+                    return;
+                }
+                KeyCode::KeyD => {
+                    self.cinematix.duplicate_keys();
+                    return;
+                }
+                _ => {}
+            }
+        }
         if mods.ctrl && key == KeyCode::KeyZ {
             if mods.shift {
                 self.cinematix.redo();
@@ -175,6 +415,9 @@ impl Game<'_> {
             self.cinematix.frame_bend_segment();
             return;
         }
+        let Some(editor_key) = editor_key(key) else {
+            return;
+        };
         let result = match editor_key {
             EditorKey::Left | EditorKey::Right if mods.shift => {
                 let frames = if editor_key == EditorKey::Left {
@@ -389,12 +632,47 @@ impl Game<'_> {
 
     /// Playback advances once per drawn frame, while the editor is open and playing.
     pub(super) fn cinematix_tick(&mut self, elapsed: Duration) {
+        self.tick_cinematix_spectator();
         if self.screen != Screen::Cinematix || self.cinematix_export.is_some() {
             return;
         }
         match self.cinematix.take_request() {
+            Some(cinematix_editor::Request::Record) if self.replay.driver.is_none() => {
+                let stopping = self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.session.is_recording());
+                let result = if stopping {
+                    self.stop_studio_recording()
+                } else {
+                    self.start_studio_recording(None)
+                };
+                self.report_cinematix_recording(result, stopping);
+            }
+            Some(cinematix_editor::Request::Record) => {}
+            Some(cinematix_editor::Request::ArmClip) if self.replay.driver.is_none() => {
+                if !self.save_armed_cinematix_clip()
+                    && self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.session.recorder_status().is_none())
+                {
+                    let result = self.start_studio_recording(Some("clip"));
+                    if let Ok(reply) = &result
+                        && reply["ok"].as_bool() == Some(true)
+                    {
+                        self.cinematix_clip = reply["path"].as_str().map(std::path::PathBuf::from);
+                        self.system_message(Text::tr("cinematix.clip.armed", &[]));
+                        self.close_cinematix_screen();
+                    } else {
+                        self.report_cinematix_recording(result, false);
+                    }
+                }
+            }
+            Some(cinematix_editor::Request::ArmClip) => {}
+            Some(cinematix_editor::Request::Spectator) => self.toggle_cinematix_spectator(),
             Some(cinematix_editor::Request::Save) => {
-                let path = film_path();
+                let path = self.cinematix_replay_film.clone().unwrap_or_else(film_path);
                 let stamp = cinematix_editor::Stamp {
                     app_version: env!("CARGO_PKG_VERSION"),
                     saved_unix: std::time::SystemTime::now()
@@ -448,6 +726,14 @@ impl Game<'_> {
         }
         let dt = elapsed.as_secs_f32().min(0.1);
         self.cinematix.advance(f64::from(dt));
+        if let Err(error) = self.sync_cinematix_replay() {
+            self.cinematix.playing = false;
+            if let Some(driver) = self.replay.driver.as_ref() {
+                self.cinematix
+                    .seek(f64::from(driver.position_ms()) / 1000.0);
+            }
+            self.system_message(Text::tr("cinematix.replay.seek_error", &[&error]));
+        }
         let _ = self.sync_cinematix_world();
         if dt <= 0.0 {
             return;
@@ -484,6 +770,32 @@ impl Game<'_> {
             return;
         }
         let ed = &self.cinematix;
+        // A cut is not motion. Show a dotted link only when the cut is selected.
+        if ed.preview_free
+            && let Some(cut) = ed
+                .doc
+                .scene
+                .meta
+                .camera_cuts
+                .iter()
+                .find(|cut| cut.at == ed.time())
+        {
+            let previous = ed.doc.camera_before_time(cut.at);
+            if let (Some((a, _)), Some((b, _))) = (
+                ed.camera_pose(previous, cut.at),
+                ed.camera_pose(cut.camera, cut.at),
+            ) {
+                for i in 0..12 {
+                    path_line(
+                        g,
+                        a.lerp(b, i as f32 / 12.0),
+                        a.lerp(b, (i as f32 + 0.45) / 12.0),
+                        PATH_FULL,
+                        2.0,
+                    );
+                }
+            }
+        }
         let times = ed.camera_path_times();
         if times.is_empty() {
             return;
@@ -523,7 +835,7 @@ impl Game<'_> {
                 );
             }
             for (i, &at) in times.iter().enumerate() {
-                let Some((position, rotation)) = ed.camera_at(at) else {
+                let Some((position, rotation)) = ed.camera_pose(ed.active_camera(), at) else {
                     continue;
                 };
                 let colour = if selected.is_some_and(|s| (s - at).abs() < 1e-9) {
@@ -534,7 +846,13 @@ impl Game<'_> {
                     PATH_FADE
                 };
                 if nearby.contains(&i) {
-                    camera_frustum(g, position, rotation, ed.fov_at(at), colour);
+                    camera_frustum(
+                        g,
+                        position,
+                        rotation,
+                        ed.camera_fov(ed.active_camera(), at),
+                        colour,
+                    );
                 }
                 key_cross(g, position, colour);
             }
@@ -543,7 +861,8 @@ impl Game<'_> {
             }
         } else {
             for &i in &nearby {
-                let Some((position, rotation)) = ed.camera_at(times[i]) else {
+                let Some((position, rotation)) = ed.camera_pose(ed.active_camera(), times[i])
+                else {
                     continue;
                 };
                 let colour = if selected.is_some_and(|s| (s - times[i]).abs() < 1e-9) {
@@ -553,7 +872,13 @@ impl Game<'_> {
                 } else {
                     PATH_FADE
                 };
-                camera_frustum(g, position, rotation, ed.fov_at(times[i]), colour);
+                camera_frustum(
+                    g,
+                    position,
+                    rotation,
+                    ed.camera_fov(ed.active_camera(), times[i]),
+                    colour,
+                );
                 key_cross(g, position, colour);
             }
             // Film view: the whole path stays faintly visible, and the segment under the
@@ -751,7 +1076,9 @@ impl Game<'_> {
                 let path = words
                     .get(1)
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(film_path);
+                    .unwrap_or_else(|| {
+                        self.cinematix_replay_film.clone().unwrap_or_else(film_path)
+                    });
                 let stamp = cinematix_editor::Stamp {
                     app_version: env!("CARGO_PKG_VERSION"),
                     saved_unix: std::time::SystemTime::now()
@@ -1311,7 +1638,7 @@ impl PathProjection {
         let focal = h * 0.5 / (ed.preview_fov().clamp(1.0, 179.0).to_radians() * 0.5).tan();
         (focal.is_finite() && focal > 0.0).then_some(Self {
             eye: glam::DVec3::from_array(eye),
-            view: horizon_client::camera::view_matrix(yaw, pitch),
+            view: horizon_client::camera::view_matrix_rolled(yaw, pitch, -ed.preview_roll()),
             center: Vec2::new(w, h) * 0.5,
             focal,
         })
@@ -1383,7 +1710,7 @@ fn camera_path_segment(
     let mut previous = None;
     for i in 0..=steps {
         let t = from + span * i as f64 / steps as f64;
-        let Some((position, _)) = ed.camera_at(t) else {
+        let Some((position, _)) = ed.camera_pose(ed.active_camera(), t) else {
             continue;
         };
         if let Some(last) = previous {

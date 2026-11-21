@@ -78,6 +78,30 @@ impl Game<'_> {
             }) => {
                 self.connect_server_with_options(&address, &name, cookies, lan, realm)?;
             }
+            Some(PendingWorldEntry::CinematixReplay(path)) => {
+                let reply = self.open_studio_replay(&path.to_string_lossy())?;
+                if reply["ok"].as_bool() == Some(true) && self.replay.standalone {
+                    let live =
+                        std::mem::replace(&mut self.cinematix, cinematix_editor::Editor::new());
+                    if !self.open_cinematix_screen() {
+                        self.cinematix = live;
+                        log::warn!("Cinematix replay opened for playback; editor not ready");
+                    } else {
+                        self.cinematix_live_editor = Some(live);
+                        let film = path.with_extension("cmx");
+                        if film.exists() {
+                            match cinematix_editor::load(&film) {
+                                Ok(doc) => self.cinematix.adopt_document(doc),
+                                Err(error) => self.system_message(horizon_client::text::Text::tr(
+                                    "cinematix.replay.film_error",
+                                    &[&error],
+                                )),
+                            }
+                        }
+                        self.cinematix_replay_film = Some(film);
+                    }
+                }
+            }
             Some(PendingWorldEntry::StudioReplay(path)) => {
                 let path_str = path.to_string_lossy().to_string();
                 if let Err(e) = self.open_studio_replay(&path_str) {

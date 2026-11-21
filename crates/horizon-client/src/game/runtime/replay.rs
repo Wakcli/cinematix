@@ -366,6 +366,33 @@ impl Game<'_> {
         Ok(())
     }
 
+    /// Drive an isolated recording from the Cinematix playhead, not the wall clock.
+    pub(super) fn sync_cinematix_replay(&mut self) -> std::io::Result<()> {
+        if !self.replay.standalone || self.screen != Screen::Cinematix {
+            return Ok(());
+        }
+        let Some(driver) = self.replay.driver.as_mut() else {
+            return Ok(());
+        };
+        driver.set_paused(true);
+        let target = ((self.cinematix.time() * 1000.0).round() as u32).min(driver.duration_ms());
+        let current = driver.position_ms();
+        if target == current {
+            return Ok(());
+        }
+        if target > current {
+            let packets = driver.seek_forward(target)?;
+            self.dispatch_studio_replay_packets(packets);
+        } else {
+            self.clear_cinematix_world();
+            let result = self.seek_studio_replay(target);
+            self.screen = Screen::Cinematix;
+            self.capture(false);
+            result?;
+        }
+        Ok(())
+    }
+
     fn dispatch_studio_replay_packets(
         &mut self,
         packets: Vec<horizon_client::studio::mcpr::TimestampedPacket>,
@@ -719,6 +746,11 @@ impl Game<'_> {
         }))
     }
     pub(super) fn close_studio_replay(&mut self) -> bool {
+        self.cinematix_replay_film = None;
+        if let Some(editor) = self.cinematix_live_editor.take() {
+            self.clear_cinematix_world();
+            self.cinematix = editor;
+        }
         self.studio_replay_closing();
         let closed = self.replay.driver.take().is_some();
         if !closed {

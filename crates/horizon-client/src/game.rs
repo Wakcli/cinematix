@@ -1768,6 +1768,10 @@ struct Game<'a> {
     pub(super) cinematix: cinematix_editor::Editor,
     /// The pointer position the editor's right-button look last saw, while it is held.
     cinematix_bend: Option<BendDrag>,
+    cinematix_spectator: Option<cinematix::SpectatorReturn>,
+    cinematix_clip: Option<std::path::PathBuf>,
+    cinematix_replay_film: Option<std::path::PathBuf>,
+    cinematix_live_editor: Option<cinematix_editor::Editor>,
     pub(super) cinematix_look: Option<(f32, f32)>,
     /// A running `cinematix render` (game/interface/cinematix_export.rs).
     pub(super) cinematix_export: Option<cinematix_export::Render>,
@@ -5220,7 +5224,8 @@ impl Game<'_> {
         if self.screen == Screen::Cinematix
             && let Some((_, yaw, pitch)) = self.cinematix.preview_view()
         {
-            return camera_rotation(horizon_client::camera::CameraType::FirstPerson, yaw, pitch);
+            return camera_rotation(horizon_client::camera::CameraType::FirstPerson, yaw, pitch)
+                * glam::Quat::from_rotation_z(self.cinematix.preview_roll().to_radians());
         }
         if self.studio.flying() {
             return camera_rotation(
@@ -8277,7 +8282,7 @@ impl Game<'_> {
             Vec::new()
         };
         pr.lap("pr_native_visuals");
-        let view = if self.studio.flying() {
+        let view = if self.studio.flying() || self.screen == Screen::Cinematix {
             glam::Mat4::from_quat(self.camera_orientation().conjugate())
         } else {
             horizon_client::camera::view_matrix(view_yaw, view_pitch)
@@ -8407,7 +8412,9 @@ impl Game<'_> {
         } else {
             self.bob_matrix(camera_alpha as f32)
         };
-        let spin = if !camera_effects {
+        let spin = if self.screen == Screen::Cinematix {
+            glam::Mat4::from_rotation_z(-self.cinematix.preview_roll().to_radians())
+        } else if !camera_effects {
             glam::Mat4::IDENTITY
         } else {
             self.spinning_matrix(camera_alpha as f32)
@@ -10958,6 +10965,10 @@ impl<'a> Game<'a> {
             studio: Default::default(),
             cinematix: Default::default(),
             cinematix_bend: None,
+            cinematix_spectator: None,
+            cinematix_clip: None,
+            cinematix_replay_film: None,
+            cinematix_live_editor: None,
             cinematix_look: None,
             cinematix_export: None,
             cinematix_world: Default::default(),

@@ -72,3 +72,7 @@ crates are ours and merge without conflict), then re-add each arm. `cargo check 
 is the check: a lost arm fails to compile when the enum gains no variant, so also run
 `cargo test -p horizon-client --lib core_tests` — the screen-id uniqueness test fails if a variant
 is added without an id.
+
+The creator-tool pass changes `game.rs` (9-line diff) to apply camera roll to the frame and
+billboards, and `game/interface/cinematix.rs` to share roll with viewport path picking and route
+clipboard shortcuts. No new dependency or engine layer is introduced.

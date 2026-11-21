@@ -3,7 +3,7 @@
 //! implemented are drawn dimmed and take no click, matching the editor's other inert controls.
 
 use crate::editor::Editor;
-use cinematix_anim::Interp;
+use cinematix_anim::{Ease, Interp};
 use cinematix_ui::Rect;
 
 pub const ROW_H: f32 = 14.0;
@@ -13,7 +13,11 @@ pub const WIDTH: f32 = 156.0;
 pub enum Action {
     AddKey,
     DeleteKey,
+    CopyKeys,
+    PasteKeys,
+    DuplicateKeys,
     Interp(Interp),
+    Ease(Ease),
     Fit,
 }
 
@@ -99,6 +103,19 @@ fn channel_items(ed: &Editor) -> Vec<Item> {
             has_key,
             false,
         ),
+        Item::command("cinematix.menu.copy_keys", Action::CopyKeys, has_key, false),
+        Item::command(
+            "cinematix.menu.paste",
+            Action::PasteKeys,
+            ed.can_paste_keys(),
+            false,
+        ),
+        Item::command(
+            "cinematix.menu.duplicate_keys",
+            Action::DuplicateKeys,
+            has_key,
+            false,
+        ),
         Item::header("cinematix.menu.interpolation"),
     ];
     for (interp, key) in [
@@ -121,17 +138,38 @@ fn channel_items(ed: &Editor) -> Vec<Item> {
             current == Some(interp),
         ));
     }
-    items.push(Item::inert("cinematix.menu.mute"));
-    items.push(Item::inert("cinematix.menu.rename"));
+    let current_ease = ed
+        .selected_key
+        .and_then(|(ci, ki)| ed.doc.channel(ci)?.keys.get(ki))
+        .map(|key| key.ease);
+    items.push(Item::header("cinematix.menu.timing"));
+    for (ease, label) in [
+        (Ease::None, "cinematix.ease.none"),
+        (Ease::In, "cinematix.ease.in"),
+        (Ease::Out, "cinematix.ease.out"),
+        (Ease::InOut, "cinematix.ease.in_out"),
+    ] {
+        items.push(Item::command(
+            label,
+            Action::Ease(ease),
+            has_key,
+            current_ease == Some(ease),
+        ));
+    }
     items
 }
 
-fn lane_items(_ed: &Editor) -> Vec<Item> {
+fn lane_items(ed: &Editor) -> Vec<Item> {
     vec![
         Item::command("cinematix.action.add_key", Action::AddKey, true, false),
         Item::command("cinematix.action.fit", Action::Fit, true, false),
         Item::inert("cinematix.tab.curves"),
-        Item::inert("cinematix.menu.paste"),
+        Item::command(
+            "cinematix.menu.paste",
+            Action::PasteKeys,
+            ed.can_paste_keys(),
+            false,
+        ),
     ]
 }
 
@@ -150,14 +188,17 @@ impl Editor {
             .find(|r| r.label.contains(pos.0, pos.1) || r.keys.contains(pos.0, pos.1))
         {
             self.selected_channel = Some(row.chan);
-            self.selected_key = None;
+            let mut hit = None;
             if row.keys.contains(pos.0, pos.1)
                 && let Some(ch) = self.doc.channel(row.chan)
             {
                 let times: Vec<f64> = ch.keys.iter().map(|k| k.t).collect();
                 if let Some(ki) = cinematix_timeline::hit_key(pos.0, &f.axis, &times, 6.0) {
-                    self.selected_key = Some((row.chan, ki));
+                    hit = Some((row.chan, ki));
                 }
+            }
+            if !hit.is_some_and(|(ci, ki)| self.key_selected(ci, ki)) {
+                self.select_only_key(hit);
             }
             self.menu = Some(Menu {
                 at: pos,
@@ -221,6 +262,18 @@ impl Editor {
             }
             Action::Interp(interp) => {
                 self.set_selected_interp(interp);
+            }
+            Action::CopyKeys => {
+                self.copy_keys();
+            }
+            Action::PasteKeys => {
+                self.paste_keys();
+            }
+            Action::DuplicateKeys => {
+                self.duplicate_keys();
+            }
+            Action::Ease(ease) => {
+                self.set_selected_ease(ease);
             }
             Action::Fit => self.fit(),
         }
@@ -292,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn inert_items_take_a_click_and_change_nothing() {
+    fn paste_without_a_clipboard_takes_a_click_and_changes_nothing() {
         let mut e = editor();
         e.seek_frame(12);
         assert!(e.add_key());
@@ -301,12 +354,13 @@ mod tests {
         let row = &f.rows[0];
         e.right_press((row.label.x + 5.0, row.label.y + 5.0));
         let menu = e.menu.as_ref().unwrap();
-        let mute = menu
+        let paste = menu
             .items
             .iter()
-            .position(|i| i.label == "cinematix.menu.mute")
+            .position(|i| i.label == "cinematix.menu.paste")
             .unwrap();
-        let at = menu.row(menu.rect(e.size()), mute);
+        assert!(!menu.items[paste].enabled);
+        let at = menu.row(menu.rect(e.size()), paste);
         assert!(e.press((at.x + 5.0, at.y + 5.0), Mods::default()));
         assert_eq!(e.doc.key_count(), keys);
     }

@@ -181,3 +181,34 @@ editor must additionally:
 The render spine comes first only in the sense that the editor must never be the reason a frame
 cannot be produced. A beautiful timeline over a renderer that cannot render is the standard failure
 mode for projects of this kind.
+
+### Editing a group of keys
+
+In the Dope Sheet, **Shift-click** keys to add or remove them from the selection. Drag any
+selected key to move the group without changing the spacing. Right-click a selected key for
+**Copy Keys**, **Paste at Playhead**, **Duplicate Keys**, delete, and interpolation. The keyboard
+shortcuts are **Ctrl+C**, **Ctrl+V**, and **Ctrl+D**. Duplicate places the first copied key on the
+first frame after the selection. Pasting or moving a group onto a key on the same track is blocked
+rather than overwriting it. Undo reverses a drag, paste, or duplicate in one step.
+
+### Framing and timing
+
+- Drag **Roll** beside Yaw and Pitch in **Camera → Properties** to tilt the film camera.
+- Turn on **Guides** above the timeline to show the rule-of-thirds grid. Guides are an editor overlay.
+- Right-click selected keys and choose a **Timing** preset to speed up or slow down the outgoing movement without reshaping its path.
+- Export uses the film camera even if Free View is on, then restores your editor view.
+
+### Recording and camera cuts
+
+- In a live world, open Cinematix with **F8** and choose **Start Recording**. You can
+  close the editor and play normally. Reopen it and choose **Stop & Save Recording**.
+- **Arm F8 Clip** starts an opt-in capture and returns you to the game. Press **F8** to
+  save everything since arming and reopen Cinematix. It does not record before you arm it.
+- From the main menu’s Studio browser, select a recording and choose **Edit in Cinematix**.
+  The playhead seeks the isolated replay. Save writes a separate `.cmx` film next to the
+  recording. Offscreen export seeks the recording for each output frame.
+- **Fly with Spectator** asks the server to switch your mode. Once it confirms, fly in game; reopen with **F8**, then choose **Return to Player** to restore your original location and mode. This needs server permission for both mode changes and teleporting. Test in a disposable world first.
+- Use **Show My Player** to frame your own avatar without moving it or changing game mode.
+- Open **Shots**, move the playhead, and choose **+ New Camera** to capture your current
+  view or click a named camera to cut to it. Click a cut marker to jump to the cut.
+  In Free View, a dotted line at the selected cut indicates a jump, not camera motion.

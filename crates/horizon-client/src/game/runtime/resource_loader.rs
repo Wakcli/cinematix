@@ -212,6 +212,7 @@ pub(super) enum PendingWorldEntry {
         cookies: Option<horizon_client::net::Cookies>,
     },
     StudioReplay(std::path::PathBuf),
+    CinematixReplay(std::path::PathBuf),
 }
 
 pub(super) struct WorldRestLoader {
