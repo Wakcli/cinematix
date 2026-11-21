@@ -390,12 +390,12 @@ impl Frame {
             x += rect.w + t.gap;
         }
 
-        let loop_check = if timeline.w > 360.0 {
-            Rect::new(timeline.x + 270.0, timeline.y + 2.0, 52.0, 16.0)
+        let loop_check = if timeline.w > 360.0 + 48.0 {
+            Rect::new(timeline.x + 318.0, timeline.y + 2.0, 52.0, 16.0)
         } else {
             Rect::new(0.0, 0.0, 0.0, 0.0)
         };
-        let free_check = if timeline.w > 440.0 {
+        let free_check = if timeline.w > 440.0 + 48.0 {
             Rect::new(loop_check.x + 56.0, loop_check.y, 72.0, 16.0)
         } else {
             Rect::new(0.0, 0.0, 0.0, 0.0)
